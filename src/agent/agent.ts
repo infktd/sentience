@@ -1,4 +1,4 @@
-import type { Character, Goal, Resource } from "../types";
+import type { Character, Goal, Resource, SimpleItem, GEOrder } from "../types";
 import type { BoardSnapshot } from "../board/board";
 import type { GameData } from "./game-data";
 import type { ApiClient } from "../api/client";
@@ -47,6 +47,40 @@ export class Agent {
     this.simulator = simulator ?? null;
   }
 
+  /**
+   * Maps API error codes to specific recovery actions.
+   * Returns a recovery goal, or null to skip the current goal and return to strategy.
+   */
+  static getErrorRecovery(
+    errorCode: number,
+    _state: Character,
+    _goal: Goal
+  ): { recovery: Goal } | "skip" | null {
+    switch (errorCode) {
+      case 475: // Task already complete / too many items
+        return { recovery: { type: "task_complete" } };
+      case 497: // Inventory full
+        return { recovery: { type: "deposit_all" } };
+      case 478: // Missing items for action
+      case 493: // Skill level too low
+      case 473: // Can't recycle/action
+        return "skip";
+      case 598: // Wrong map/location — retry will re-evaluate and move
+        return "skip";
+      case 486: // Action already in progress — wait cooldown
+        return "skip";
+      case 490: // Item already equipped
+        return "skip";
+      case 434: // GE order doesn't have enough items
+      case 435: // Can't trade with yourself
+      case 436: // GE transaction in progress
+      case 492: // Insufficient gold
+        return "skip";
+      default:
+        return null; // Unknown error — fall through to counter
+    }
+  }
+
   static getActivityType(goal: Goal, resource?: Resource): ActivityType | null {
     if (goal.type === "fight") return "combat";
     if (goal.type === "gather") {
@@ -70,14 +104,60 @@ export class Agent {
     return null;
   }
 
-  static checkTaskOverride(state: Character): Goal | null {
+  static checkTaskOverride(
+    state: Character,
+    gameData?: GameData,
+    bankItems?: SimpleItem[]
+  ): Goal | null {
     // Task completed — go turn it in
     if (state.task && state.task_progress >= state.task_total) {
       return { type: "task_complete" };
     }
+    // Item task — trade items when we have a meaningful batch
+    if (state.task && state.task_type === "items") {
+      const inInventory = state.inventory
+        .filter((s) => s.code === state.task)
+        .reduce((sum, s) => sum + s.quantity, 0);
+      if (inInventory > 0) {
+        const remaining = state.task_total - state.task_progress;
+        const totalQuantity = state.inventory.reduce((sum, s) => sum + s.quantity, 0);
+        const inventoryNearlyFull = totalQuantity >= state.inventory_max_items - 5;
+        // Trade when: can finish the task, OR inventory is nearly full
+        if (inInventory >= remaining || inventoryNearlyFull) {
+          return { type: "task_trade" };
+        }
+      }
+    }
     // No active task — go get one
     if (!state.task) {
       return { type: "task_new" };
+    }
+    // Check if current task is unachievable — cancel it if possible
+    if (gameData && bankItems && state.task && (state.task_type === "monsters" || state.task_type === "items")) {
+      const achievable = gameData.isTaskAchievable(
+        { code: state.task, type: state.task_type as "monsters" | "items" },
+        {
+          mining: state.mining_level,
+          woodcutting: state.woodcutting_level,
+          fishing: state.fishing_level,
+          alchemy: state.alchemy_level,
+          weaponcrafting: state.weaponcrafting_level,
+          gearcrafting: state.gearcrafting_level,
+          jewelrycrafting: state.jewelrycrafting_level,
+          cooking: state.cooking_level,
+          combat: state.level,
+        },
+        bankItems
+      );
+      if (!achievable) {
+        // Only cancel if character has tasks_coin
+        const taskCoins = state.inventory
+          .filter((s) => s.code === "tasks_coin")
+          .reduce((sum, s) => sum + s.quantity, 0);
+        if (taskCoins >= 1) {
+          return { type: "task_cancel" };
+        }
+      }
     }
     return null;
   }
@@ -135,25 +215,40 @@ export class Agent {
     // Wait for cooldown
     await this.api.waitForCooldown(this.name);
 
-    // Check survival overrides
-    const override = Agent.checkSurvivalOverride(this.state);
     const boardSnapshot = this.board.getSnapshot();
 
     let goal: Goal;
     let reason: string;
 
-    if (override) {
-      goal = override;
-      reason = `survival override: ${goal.type}`;
+    // Priority chain for overrides:
+    // 1. Rest (critical safety)
+    // 2. Task complete/trade (frees inventory, must fire before deposit)
+    // 3. Deposit all (inventory overflow)
+    // 4. Task new (get a task if none)
+    // 5. Strategy
+    if (this.state.hp < this.state.max_hp * 0.4) {
+      goal = { type: "rest" };
+      reason = "survival override: rest";
     } else {
-      // Check task management (complete/accept)
-      const taskOverride = Agent.checkTaskOverride(this.state);
-      if (taskOverride) {
+      const taskOverride = Agent.checkTaskOverride(this.state, this.gameData, boardSnapshot.bank.items);
+      const isHighPriorityTask = taskOverride && taskOverride.type !== "task_new" && taskOverride.type !== "task_cancel";
+      if (isHighPriorityTask) {
+        // Task complete or trade — higher priority than deposit
         goal = taskOverride;
         reason = `task management: ${goal.type}`;
       } else {
-        goal = this.strategy(this.state, boardSnapshot, this.gameData);
-        reason = "strategy decision";
+        const survivalOverride = Agent.checkSurvivalOverride(this.state);
+        if (survivalOverride) {
+          goal = survivalOverride;
+          reason = `survival override: ${goal.type}`;
+        } else if (taskOverride) {
+          // task_new or task_cancel
+          goal = taskOverride;
+          reason = `task management: ${goal.type}`;
+        } else {
+          goal = this.strategy(this.state, boardSnapshot, this.gameData);
+          reason = "strategy decision";
+        }
       }
     }
 
@@ -221,15 +316,42 @@ export class Agent {
       this.consecutiveFailures = 0;
       this.lastFailedGoalType = null;
     } catch (err) {
-      this.consecutiveFailures++;
-      this.lastFailedGoalType = goalKey;
-
       if (err instanceof ApiRequestError) {
         this.logger.error("Action failed", {
           goal,
           errorCode: err.errorCode,
           errorMessage: err.errorMessage,
         });
+
+        const recovery = Agent.getErrorRecovery(err.errorCode, this.state!, goal);
+        if (recovery === "skip") {
+          // Known recoverable error — skip goal, return to strategy next tick
+          this.logger.info("Skipping goal due to recoverable error", {
+            errorCode: err.errorCode,
+          });
+          this.consecutiveFailures = 0;
+          this.lastFailedGoalType = null;
+        } else if (recovery !== null) {
+          // Specific recovery action
+          this.logger.info("Executing error recovery", {
+            errorCode: err.errorCode,
+            recoveryGoal: recovery.recovery.type,
+          });
+          try {
+            await this.api.waitForCooldown(this.name);
+            await this.executeGoal(recovery.recovery);
+          } catch (recoveryErr) {
+            this.logger.error("Recovery action also failed", {
+              error: String(recoveryErr),
+            });
+          }
+          this.consecutiveFailures = 0;
+          this.lastFailedGoalType = null;
+        } else {
+          // Unknown error — use counter
+          this.consecutiveFailures++;
+          this.lastFailedGoalType = goalKey;
+        }
       } else {
         throw err; // Re-throw unexpected errors to the outer catch
       }
@@ -246,8 +368,12 @@ export class Agent {
       }
 
       case "deposit_all": {
+        // Skip task items for active item tasks — they need to be traded, not deposited
+        const activeTaskItem = this.state!.task_type === "items" && this.state!.task
+          ? this.state!.task
+          : null;
         const itemsToDeposit = this.state!.inventory
-          .filter((s) => s.quantity > 0)
+          .filter((s) => s.quantity > 0 && s.code !== activeTaskItem)
           .map((s) => ({ code: s.code, quantity: s.quantity }));
         const hasGold = this.state!.gold > 0;
         if (itemsToDeposit.length === 0 && !hasGold) break;
@@ -419,17 +545,22 @@ export class Agent {
               this.state = moveResult.character;
             }
 
-            // Withdraw materials (multiplied by craft quantity)
+            // Withdraw all needed materials in one batch call
+            const materialsToWithdraw: SimpleItem[] = [];
             for (const mat of materials) {
               const inInventory = this.state!.inventory
                 .filter((s) => s.code === mat.code)
                 .reduce((sum, s) => sum + s.quantity, 0);
               const needed = mat.quantity * qty - inInventory;
               if (needed > 0) {
-                await this.api.waitForCooldown(this.name);
-                const withdrawResult = await this.api.withdrawItems(this.name, [{ code: mat.code, quantity: needed }]);
-                this.state = withdrawResult.character;
+                materialsToWithdraw.push({ code: mat.code, quantity: needed });
               }
+            }
+            if (materialsToWithdraw.length > 0) {
+              await this.api.waitForCooldown(this.name);
+              const withdrawResult = await this.api.withdrawItems(this.name, materialsToWithdraw);
+              this.state = withdrawResult.character;
+              this.board.updateBank(withdrawResult.bank, this.board.getSnapshot().bank.gold);
             }
           }
         }
@@ -516,6 +647,7 @@ export class Agent {
             await this.api.waitForCooldown(this.name);
             const withdrawResult = await this.api.withdrawItems(this.name, [{ code: npcItem.currency, quantity: needed }]);
             this.state = withdrawResult.character;
+            this.board.updateBank(withdrawResult.bank, this.board.getSnapshot().bank.gold);
           }
         }
 
@@ -581,9 +713,7 @@ export class Agent {
         const completeResult = await this.api.taskComplete(this.name);
         this.state = completeResult.character;
         this.logger.info("Task completed", {
-          task: completeResult.task.code,
-          type: completeResult.task.type,
-          rewards: completeResult.task.rewards,
+          rewards: completeResult.rewards,
         });
 
         // Exchange coins if we have 6+
@@ -595,8 +725,7 @@ export class Agent {
           const exchangeResult = await this.api.taskExchange(this.name);
           this.state = exchangeResult.character;
           this.logger.info("Exchanged task coins", {
-            reward: exchangeResult.reward.code,
-            quantity: exchangeResult.reward.quantity,
+            rewards: exchangeResult.rewards,
           });
         }
 
@@ -612,12 +741,50 @@ export class Agent {
         break;
       }
 
+      case "task_trade": {
+        // Trade task items to the tasks master
+        const tradeItemCode = this.state!.task;
+        const inInventory = this.state!.inventory
+          .filter((s) => s.code === tradeItemCode)
+          .reduce((sum, s) => sum + s.quantity, 0);
+        const remaining = this.state!.task_total - this.state!.task_progress;
+        const tradeQty = Math.min(inInventory, remaining);
+        if (tradeQty <= 0) break;
+
+        // Move to the correct tasks_master for item tasks
+        const tradeMasterMap = this.gameData.findTasksMaster(this.state!.task_type);
+        if (!tradeMasterMap) {
+          this.logger.error("Tasks master not found for trade", { taskType: this.state!.task_type });
+          break;
+        }
+        if (this.state!.x !== tradeMasterMap.x || this.state!.y !== tradeMasterMap.y) {
+          const moveResult = await this.api.move(this.name, tradeMasterMap.x, tradeMasterMap.y);
+          this.state = moveResult.character;
+        }
+
+        // Trade items
+        await this.api.waitForCooldown(this.name);
+        const tradeResult = await this.api.taskTrade(this.name, tradeItemCode, tradeQty);
+        this.state = tradeResult.character;
+        this.logger.info("Traded task items", {
+          item: tradeResult.trade.code,
+          quantity: tradeResult.trade.quantity,
+          progress: this.state!.task_progress,
+          total: this.state!.task_total,
+        });
+        break;
+      }
+
       case "task_new": {
-        // Go to nearest tasks_master and accept a task
-        const masters = [
-          this.gameData.findTasksMaster("monsters"),
-          this.gameData.findTasksMaster("items"),
-        ].filter((m) => m !== undefined);
+        // Pick task type based on character strengths
+        const bestTaskType = this.gameData.evaluateBestTaskType(this.state!);
+        const preferredMaster = this.gameData.findTasksMaster(bestTaskType);
+        const masters = preferredMaster
+          ? [preferredMaster]
+          : [
+              this.gameData.findTasksMaster("monsters"),
+              this.gameData.findTasksMaster("items"),
+            ].filter((m) => m !== undefined);
         const nearestMaster = this.gameData.findNearestMap(
           this.state!.x,
           this.state!.y,
@@ -639,6 +806,153 @@ export class Agent {
           task: taskResult.task.code,
           type: taskResult.task.type,
           total: taskResult.task.total,
+        });
+        break;
+      }
+
+      case "task_cancel": {
+        // Cancel unachievable task (costs 1 tasks_coin)
+        const cancelMasterMap = this.gameData.findTasksMaster(this.state!.task_type);
+        if (!cancelMasterMap) {
+          this.logger.error("Tasks master not found for cancel", { taskType: this.state!.task_type });
+          break;
+        }
+        if (this.state!.x !== cancelMasterMap.x || this.state!.y !== cancelMasterMap.y) {
+          const moveResult = await this.api.move(this.name, cancelMasterMap.x, cancelMasterMap.y);
+          this.state = moveResult.character;
+        }
+        await this.api.waitForCooldown(this.name);
+        const cancelResult = await this.api.taskCancel(this.name);
+        this.state = cancelResult.character;
+        this.logger.info("Task cancelled");
+        break;
+      }
+
+      case "buy_ge": {
+        // Find cheapest matching order
+        const geOrders = this.board.getSnapshot().geOrders;
+        const matching = geOrders
+          .filter((o: GEOrder) => o.code === goal.item && o.price <= goal.maxPrice && o.quantity > 0)
+          .sort((a: GEOrder, b: GEOrder) => a.price - b.price);
+
+        if (matching.length === 0) {
+          this.logger.warn("No GE orders available", { item: goal.item });
+          break;
+        }
+
+        const order = matching[0];
+        const buyQty = Math.min(goal.quantity, order.quantity);
+        const totalCost = order.price * buyQty;
+
+        // Withdraw gold from bank if needed
+        if (this.state!.gold < totalCost) {
+          const bank = this.gameData.findNearestBank(this.state!.x, this.state!.y);
+          if (!bank) {
+            this.logger.error("No bank found for gold withdrawal");
+            break;
+          }
+          if (this.state!.x !== bank.x || this.state!.y !== bank.y) {
+            const moveResult = await this.api.move(this.name, bank.x, bank.y);
+            this.state = moveResult.character;
+          }
+          const goldNeeded = totalCost - this.state!.gold;
+          if (goldNeeded > 0) {
+            await this.api.waitForCooldown(this.name);
+            const goldResult = await this.api.withdrawGold(this.name, goldNeeded);
+            this.state = goldResult.character;
+            this.board.updateBank(
+              this.board.getSnapshot().bank.items,
+              goldResult.bank.quantity
+            );
+          }
+        }
+
+        // Move to GE
+        const geMaps = this.gameData.findMapsWithContent("grand_exchange");
+        const geMap = this.gameData.findNearestMap(this.state!.x, this.state!.y, geMaps);
+        if (!geMap) {
+          this.logger.error("No grand exchange found on map");
+          break;
+        }
+        if (this.state!.x !== geMap.x || this.state!.y !== geMap.y) {
+          await this.api.waitForCooldown(this.name);
+          const moveResult = await this.api.move(this.name, geMap.x, geMap.y);
+          this.state = moveResult.character;
+        }
+
+        // Buy from GE
+        await this.api.waitForCooldown(this.name);
+        const buyResult = await this.api.buyGE(this.name, order.id, buyQty);
+        this.state = buyResult.character;
+        this.logger.info("Bought from GE", {
+          item: goal.item,
+          quantity: buyQty,
+          price: order.price,
+          totalCost: buyResult.order.total_price,
+        });
+
+        // Deposit purchased items to bank
+        const bankAfterBuy = this.gameData.findNearestBank(this.state!.x, this.state!.y);
+        if (bankAfterBuy) {
+          if (this.state!.x !== bankAfterBuy.x || this.state!.y !== bankAfterBuy.y) {
+            await this.api.waitForCooldown(this.name);
+            const moveResult = await this.api.move(this.name, bankAfterBuy.x, bankAfterBuy.y);
+            this.state = moveResult.character;
+          }
+          const boughtItems = this.state!.inventory
+            .filter((s) => s.code === goal.item && s.quantity > 0)
+            .map((s) => ({ code: s.code, quantity: s.quantity }));
+          if (boughtItems.length > 0) {
+            await this.api.waitForCooldown(this.name);
+            const depositResult = await this.api.depositItems(this.name, boughtItems);
+            this.state = depositResult.character;
+            this.board.updateBank(depositResult.bank, this.board.getSnapshot().bank.gold);
+          }
+        }
+        break;
+      }
+
+      case "sell_ge": {
+        // Move to bank and withdraw items to sell
+        const bankForSell = this.gameData.findNearestBank(this.state!.x, this.state!.y);
+        if (!bankForSell) {
+          this.logger.error("No bank found for GE sell withdrawal");
+          break;
+        }
+        if (this.state!.x !== bankForSell.x || this.state!.y !== bankForSell.y) {
+          const moveResult = await this.api.move(this.name, bankForSell.x, bankForSell.y);
+          this.state = moveResult.character;
+        }
+
+        await this.api.waitForCooldown(this.name);
+        const sellWithdrawResult = await this.api.withdrawItems(this.name, [
+          { code: goal.item, quantity: goal.quantity },
+        ]);
+        this.state = sellWithdrawResult.character;
+        this.board.updateBank(sellWithdrawResult.bank, this.board.getSnapshot().bank.gold);
+
+        // Move to GE
+        const sellGeMaps = this.gameData.findMapsWithContent("grand_exchange");
+        const sellGeMap = this.gameData.findNearestMap(this.state!.x, this.state!.y, sellGeMaps);
+        if (!sellGeMap) {
+          this.logger.error("No grand exchange found on map");
+          break;
+        }
+        if (this.state!.x !== sellGeMap.x || this.state!.y !== sellGeMap.y) {
+          await this.api.waitForCooldown(this.name);
+          const moveResult = await this.api.move(this.name, sellGeMap.x, sellGeMap.y);
+          this.state = moveResult.character;
+        }
+
+        // Create sell order
+        await this.api.waitForCooldown(this.name);
+        const sellResult = await this.api.sellGE(this.name, goal.item, goal.quantity, goal.price);
+        this.state = sellResult.character;
+        this.logger.info("Posted GE sell order", {
+          item: goal.item,
+          quantity: goal.quantity,
+          price: goal.price,
+          tax: sellResult.order.tax,
         });
         break;
       }
@@ -686,15 +1000,34 @@ export class Agent {
       this.state = moveResult.character;
     }
 
-    // Execute swaps
+    // Phase 1: Unequip all old items (sequential — API requires one-by-one)
     for (const change of changes) {
       if (change.unequipCode) {
         this.state = await this.api.unequip(this.name, change.slot);
-        const depositResult = await this.api.depositItems(this.name, [{ code: change.unequipCode, quantity: 1 }]);
-        this.state = depositResult.character;
       }
-      const withdrawResult = await this.api.withdrawItems(this.name, [{ code: change.equipCode, quantity: 1 }]);
-      this.state = withdrawResult.character;
+    }
+
+    // Phase 2: Batch deposit all old items
+    const itemsToDeposit = changes
+      .filter((c) => c.unequipCode)
+      .map((c) => ({ code: c.unequipCode!, quantity: 1 }));
+    if (itemsToDeposit.length > 0) {
+      await this.api.waitForCooldown(this.name);
+      const depositResult = await this.api.depositItems(this.name, itemsToDeposit);
+      this.state = depositResult.character;
+      this.board.updateBank(depositResult.bank, this.board.getSnapshot().bank.gold);
+    }
+
+    // Phase 3: Batch withdraw all new items
+    const itemsToWithdraw = changes.map((c) => ({ code: c.equipCode, quantity: 1 }));
+    await this.api.waitForCooldown(this.name);
+    const withdrawResult = await this.api.withdrawItems(this.name, itemsToWithdraw);
+    this.state = withdrawResult.character;
+    this.board.updateBank(withdrawResult.bank, this.board.getSnapshot().bank.gold);
+
+    // Phase 4: Equip all new items (sequential — API requires one-by-one)
+    for (const change of changes) {
+      await this.api.waitForCooldown(this.name);
       this.state = await this.api.equip(this.name, change.equipCode, change.slot);
     }
 
@@ -733,24 +1066,28 @@ export class Agent {
     const bankMap = new Map<string, number>();
     for (const bi of bankItems) bankMap.set(bi.code, bi.quantity);
 
-    let itemIndex = 0;
+    // Phase 1: Unequip all old utility items
     for (const { slot, currentCode } of slotsToRestock) {
-      // Unequip old item if slot still has a code
       if (currentCode) {
         await this.api.waitForCooldown(this.name);
         this.state = await this.api.unequip(this.name, slot);
-        // Deposit anything that ended up in inventory
-        const toDeposit = this.state!.inventory
-          .filter((s) => s.quantity > 0)
-          .map((s) => ({ code: s.code, quantity: s.quantity }));
-        if (toDeposit.length > 0) {
-          await this.api.waitForCooldown(this.name);
-          const depositResult = await this.api.depositItems(this.name, toDeposit);
-          this.state = depositResult.character;
-        }
       }
+    }
 
-      // Pick next available item (wrap to reuse if only 1 type)
+    // Phase 2: Batch deposit anything that ended up in inventory
+    const toDeposit = this.state!.inventory
+      .filter((s) => s.quantity > 0)
+      .map((s) => ({ code: s.code, quantity: s.quantity }));
+    if (toDeposit.length > 0) {
+      await this.api.waitForCooldown(this.name);
+      const depositResult = await this.api.depositItems(this.name, toDeposit);
+      this.state = depositResult.character;
+    }
+
+    // Phase 3: Determine what to withdraw for each slot, batch withdraw
+    const slotAssignments: Array<{ slot: "utility1" | "utility2"; code: string; qty: number }> = [];
+    let itemIndex = 0;
+    for (const { slot } of slotsToRestock) {
       if (itemIndex >= bestItems.length) itemIndex = 0;
       const item = bestItems[itemIndex];
       const availableQty = bankMap.get(item.code) ?? 0;
@@ -759,19 +1096,23 @@ export class Agent {
         itemIndex++;
         continue;
       }
-
-      // Withdraw and equip
-      await this.api.waitForCooldown(this.name);
-      const withdrawResult = await this.api.withdrawItems(this.name, [
-        { code: item.code, quantity: qty },
-      ]);
-      this.state = withdrawResult.character;
-
-      await this.api.waitForCooldown(this.name);
-      this.state = await this.api.equip(this.name, item.code, slot, qty);
-
+      slotAssignments.push({ slot, code: item.code, qty });
       bankMap.set(item.code, availableQty - qty);
       itemIndex++;
+    }
+
+    if (slotAssignments.length > 0) {
+      const itemsToWithdraw = slotAssignments.map((a) => ({ code: a.code, quantity: a.qty }));
+      await this.api.waitForCooldown(this.name);
+      const withdrawResult = await this.api.withdrawItems(this.name, itemsToWithdraw);
+      this.state = withdrawResult.character;
+      this.board.updateBank(withdrawResult.bank, this.board.getSnapshot().bank.gold);
+
+      // Phase 4: Equip each utility item
+      for (const { slot, code, qty } of slotAssignments) {
+        await this.api.waitForCooldown(this.name);
+        this.state = await this.api.equip(this.name, code, slot, qty);
+      }
     }
 
     this.syncBoard();
@@ -788,7 +1129,8 @@ export class Agent {
       return item?.craft?.skill ?? "crafting";
     }
     if (goal.type === "buy_npc") return goal.npc;
-    if (goal.type === "task_complete" || goal.type === "task_new") return "task";
+    if (goal.type === "buy_ge" || goal.type === "sell_ge") return "grand_exchange";
+    if (goal.type === "task_complete" || goal.type === "task_new" || goal.type === "task_trade" || goal.type === "task_cancel") return "task";
     return "";
   }
 

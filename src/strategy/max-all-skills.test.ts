@@ -75,6 +75,7 @@ function makeGameData(): GameData {
 const emptyBoard: BoardSnapshot = {
   characters: {},
   bank: { items: [], gold: 0, lastUpdated: 0 },
+  geOrders: [],
 };
 
 describe("maxAllSkills", () => {
@@ -129,6 +130,7 @@ describe("maxAllSkills", () => {
         },
       },
       bank: { items: [], gold: 0, lastUpdated: 0 },
+      geOrders: [],
     };
     const gd = makeGameData();
     const goal = maxAllSkills(char, board, gd);
@@ -160,6 +162,7 @@ describe("maxAllSkills", () => {
     const board: BoardSnapshot = {
       characters: {},
       bank: { items: [{ code: "copper_bar", quantity: 10 }], gold: 0, lastUpdated: Date.now() },
+      geOrders: [],
     };
     const gd = makeGameData();
     const goal = maxAllSkills(char, board, gd);
@@ -170,22 +173,75 @@ describe("maxAllSkills", () => {
     }
   });
 
-  test("skips crafting skill when bank lacks materials", () => {
+  test("resolves chain for crafting skill when bank lacks materials", () => {
+    // Set up: weaponcrafting is lowest, no copper_bar in bank, but can mine copper_ore
+    const gd = new GameData();
+    gd.load(
+      [
+        { map_id: 1, name: "Copper Mine", skin: "mine", x: 2, y: 0, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "resource", code: "copper_rocks" } } },
+        { map_id: 5, name: "Bank", skin: "bank", x: 4, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "bank", code: "bank" } } },
+        { map_id: 4, name: "Chicken Coop", skin: "coop", x: 0, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "monster", code: "chicken" } } },
+      ] as GameMap[],
+      [
+        { name: "Copper Rocks", code: "copper_rocks", skill: "mining", level: 1, drops: [{ code: "copper_ore", rate: 100, min_quantity: 1, max_quantity: 1 }] },
+      ] as Resource[],
+      [
+        { name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [] },
+      ] as Monster[],
+      [
+        { name: "Copper Bar", code: "copper_bar", level: 1, type: "resource", subtype: "bar", description: "", tradeable: true, craft: { skill: "mining", level: 1, items: [{ code: "copper_ore", quantity: 10 }], quantity: 1 } },
+        { name: "Copper Dagger", code: "copper_dagger", level: 1, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
+      ] as Item[],
+    );
+
     const char = makeChar({
       mining_level: 5,
       woodcutting_level: 5,
       fishing_level: 5,
-      weaponcrafting_level: 1, // lowest but no materials
+      weaponcrafting_level: 1, // lowest
       gearcrafting_level: 5,
       jewelrycrafting_level: 5,
       cooking_level: 5,
       alchemy_level: 5,
       level: 5,
     });
-    const gd = makeGameData();
-    // Empty bank — no materials for weaponcrafting
+    // Empty bank — chain resolves copper_bar → copper_ore → gather copper_rocks
     const goal = maxAllSkills(char, emptyBoard, gd);
-    // Should fall through to combat (next lowest after crafting skills all skip)
+    expect(goal.type).toBe("gather");
+    if (goal.type === "gather") {
+      expect(goal.resource).toBe("copper_rocks");
+    }
+  });
+
+  test("falls through when chain cant resolve for crafting skill", () => {
+    const char = makeChar({
+      mining_level: 5,
+      woodcutting_level: 5,
+      fishing_level: 5,
+      weaponcrafting_level: 1, // lowest but no materials and no chain
+      gearcrafting_level: 5,
+      jewelrycrafting_level: 5,
+      cooking_level: 5,
+      alchemy_level: 5,
+      level: 5,
+    });
+    // Game data with no resources to gather for the recipe materials
+    const gd = new GameData();
+    gd.load(
+      [
+        { map_id: 4, name: "Chicken Coop", skin: "coop", x: 0, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "monster", code: "chicken" } } },
+        { map_id: 5, name: "Bank", skin: "bank", x: 4, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "bank", code: "bank" } } },
+      ] as GameMap[],
+      [],
+      [
+        { name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [] },
+      ] as Monster[],
+      [
+        { name: "Copper Dagger", code: "copper_dagger", level: 1, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
+      ] as Item[],
+    );
+    const goal = maxAllSkills(char, emptyBoard, gd);
+    // Should fall through past crafting since chain can't resolve
     expect(goal.type).not.toBe("craft");
   });
 
@@ -204,6 +260,7 @@ describe("maxAllSkills", () => {
     const board: BoardSnapshot = {
       characters: {},
       bank: { items: [{ code: "copper_ore", quantity: 15 }], gold: 0, lastUpdated: Date.now() },
+      geOrders: [],
     };
     const gd = makeGameData();
     const goal = maxAllSkills(char, board, gd);
@@ -229,6 +286,7 @@ describe("maxAllSkills", () => {
     const board: BoardSnapshot = {
       characters: {},
       bank: { items: [{ code: "copper_ore", quantity: 3 }], gold: 0, lastUpdated: Date.now() },
+      geOrders: [],
     };
     const gd = makeGameData();
     const goal = maxAllSkills(char, board, gd);
@@ -277,6 +335,7 @@ describe("maxAllSkills", () => {
     const board: BoardSnapshot = {
       characters: {},
       bank: { items: [{ code: "copper_ore", quantity: 5 }], gold: 0, lastUpdated: Date.now() },
+      geOrders: [],
     };
     const goal = maxAllSkills(char, board, gd);
     expect(goal.type).toBe("gather");
@@ -309,6 +368,7 @@ describe("maxAllSkills", () => {
         gold: 0,
         lastUpdated: Date.now(),
       },
+      geOrders: [],
     };
     const gd = makeGameData();
     const goal = maxAllSkills(char, board, gd);
@@ -317,6 +377,52 @@ describe("maxAllSkills", () => {
       expect(goal.npc).toBe("tailor");
       expect(goal.item).toBe("cloth");
       expect(goal.quantity).toBe(1);
+    }
+  });
+
+  test("gear upgrade fallback includes gathering activity", () => {
+    // All skills maxed — no normal goals, but craftable mining gear exists
+    const gd = new GameData();
+    gd.load(
+      [
+        { map_id: 5, name: "Bank", skin: "bank", x: 4, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "bank", code: "bank" } } },
+      ] as GameMap[],
+      [],
+      [],
+      [
+        {
+          name: "Mining Helmet", code: "mining_helmet", level: 1, type: "helmet",
+          subtype: "helmet", description: "", tradeable: true,
+          effects: [{ code: "mining", value: 15, description: "" }],
+          craft: { skill: "gearcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 },
+        },
+      ] as Item[],
+    );
+
+    const char = makeChar({
+      mining_level: 1, // lowest gathering → gathering:mining included in upgrade check
+      woodcutting_level: 5,
+      fishing_level: 5,
+      alchemy_level: 5,
+      weaponcrafting_level: 5,
+      gearcrafting_level: 5,
+      jewelrycrafting_level: 5,
+      cooking_level: 5,
+      level: 5,
+      helmet_slot: "",
+    });
+    // Bank has materials for the mining helmet
+    const board: BoardSnapshot = {
+      characters: {},
+      bank: { items: [{ code: "copper_bar", quantity: 10 }], gold: 0, lastUpdated: Date.now() },
+      geOrders: [],
+    };
+    // No gathering resources or monsters → all skills fall through to upgrade fallback
+    const goal = maxAllSkills(char, board, gd);
+    // Should find the mining helmet as a craftable upgrade (via gathering:mining activity scoring)
+    expect(goal.type).toBe("craft");
+    if (goal.type === "craft") {
+      expect(goal.item).toBe("mining_helmet");
     }
   });
 
@@ -343,10 +449,81 @@ describe("maxAllSkills", () => {
         gold: 0,
         lastUpdated: Date.now(),
       },
+      geOrders: [],
     };
     const gd = makeGameData();
     const goal = maxAllSkills(char, board, gd);
     // Should NOT be buy_npc since we can't afford it
     expect(goal.type).not.toBe("buy_npc");
+  });
+
+  test("falls back to GE buy when chain resolution fails and orders exist", () => {
+    // Set up: weaponcrafting is lowest, recipe needs copper_bar,
+    // copper_bar is not obtainable via chain (no resources, no monsters to drop it)
+    // but GE has copper_bar orders available
+    const gd = new GameData();
+    gd.load(
+      [
+        { map_id: 4, name: "Chicken Coop", skin: "coop", x: 0, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "monster", code: "chicken" } } },
+        { map_id: 5, name: "Bank", skin: "bank", x: 4, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "bank", code: "bank" } } },
+      ] as GameMap[],
+      [],
+      [
+        { name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [] },
+      ] as Monster[],
+      [
+        { name: "Copper Dagger", code: "copper_dagger", level: 1, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
+      ] as Item[],
+    );
+    const char = makeChar({
+      mining_level: 5,
+      woodcutting_level: 5,
+      fishing_level: 5,
+      weaponcrafting_level: 1, // lowest
+      gearcrafting_level: 5,
+      jewelrycrafting_level: 5,
+      cooking_level: 5,
+      alchemy_level: 5,
+      level: 5,
+    });
+    const board: BoardSnapshot = {
+      characters: {},
+      bank: { items: [], gold: 500, lastUpdated: Date.now() },
+      geOrders: [
+        { id: "o1", seller: "someone", code: "copper_bar", quantity: 10, price: 5, created_at: "" },
+      ],
+    };
+    const goal = maxAllSkills(char, board, gd);
+    expect(goal.type).toBe("buy_ge");
+    if (goal.type === "buy_ge") {
+      expect(goal.item).toBe("copper_bar");
+    }
+  });
+
+  test("sells excess items on GE when idle", () => {
+    // All skills have no resources/monsters → would normally idle
+    // But bank has excess non-recipe items
+    const gd = new GameData();
+    gd.load(
+      [
+        { map_id: 5, name: "Bank", skin: "bank", x: 4, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "bank", code: "bank" } } },
+      ] as GameMap[],
+      [],
+      [],
+      [
+        { name: "Feather", code: "feather", level: 1, type: "resource", subtype: "misc", description: "", tradeable: true },
+      ] as Item[],
+    );
+    const char = makeChar();
+    const board: BoardSnapshot = {
+      characters: {},
+      bank: { items: [{ code: "feather", quantity: 50 }], gold: 100, lastUpdated: Date.now() },
+      geOrders: [],
+    };
+    const goal = maxAllSkills(char, board, gd);
+    expect(goal.type).toBe("sell_ge");
+    if (goal.type === "sell_ge") {
+      expect(goal.item).toBe("feather");
+    }
   });
 });

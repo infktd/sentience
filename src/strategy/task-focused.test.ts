@@ -67,6 +67,7 @@ function makeGameData(): GameData {
 const emptyBoard: BoardSnapshot = {
   characters: {},
   bank: { items: [], gold: 0, lastUpdated: 0 },
+  geOrders: [],
 };
 
 describe("taskFocused", () => {
@@ -118,6 +119,7 @@ describe("taskFocused", () => {
     const board: BoardSnapshot = {
       characters: {},
       bank: { items: [{ code: "gudgeon", quantity: 10 }], gold: 0, lastUpdated: Date.now() },
+      geOrders: [],
     };
     const gd = makeGameData();
     const goal = taskFocused(char, board, gd);
@@ -187,6 +189,7 @@ describe("taskFocused", () => {
     const board: BoardSnapshot = {
       characters: {},
       bank: { items: [{ code: "copper_ore", quantity: 50 }], gold: 0, lastUpdated: Date.now() },
+      geOrders: [],
     };
     const gd = makeGameData();
     const goal = taskFocused(char, board, gd);
@@ -224,6 +227,7 @@ describe("taskFocused", () => {
     const board: BoardSnapshot = {
       characters: {},
       bank: { items: [{ code: "copper_bar", quantity: 10 }], gold: 0, lastUpdated: Date.now() },
+      geOrders: [],
     };
     const goal = taskFocused(char, board, gd);
     expect(goal.type).toBe("fight");

@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { GameData } from "./game-data";
-import type { GameMap, Resource, Monster, Item, SimpleItem, NpcItem } from "../types";
+import type { GameMap, Resource, Monster, Item, SimpleItem, NpcItem, ActiveEvent, Character, GEOrder } from "../types";
 
 describe("GameData", () => {
   test("findMapsWithResource returns maps containing a resource", () => {
@@ -590,6 +590,89 @@ describe("GameData", () => {
     expect(goal).toBeNull();
   });
 
+  // === applyEvents tests ===
+
+  test("applyEvents adds event maps to maps array", () => {
+    const gameData = new GameData();
+    gameData.load(
+      [
+        { map_id: 1, name: "Town", skin: "town", x: 0, y: 0, layer: "overworld" as const, access: { type: "standard" as const }, interactions: { content: { type: "bank" as const, code: "bank" } } },
+      ] as GameMap[],
+      [],
+      []
+    );
+
+    const eventMap: GameMap = {
+      map_id: 999, name: "Event Forest", skin: "event", x: 10, y: 10,
+      layer: "overworld" as const,
+      access: { type: "standard" as const },
+      interactions: { content: { type: "monster" as const, code: "event_dragon" } },
+    };
+    const event: ActiveEvent = {
+      name: "Dragon Invasion",
+      code: "dragon_invasion",
+      map: eventMap,
+      previous_skin: "forest",
+      duration: 3600,
+      expiration: new Date(Date.now() + 3600000).toISOString(),
+      created_at: new Date().toISOString(),
+    };
+    gameData.applyEvents([event]);
+
+    const maps = gameData.findMapsWithMonster("event_dragon");
+    expect(maps).toHaveLength(1);
+    expect(maps[0].x).toBe(10);
+  });
+
+  test("findMapsWithMonster returns event monster locations after apply", () => {
+    const gameData = new GameData();
+    gameData.load(
+      [
+        { map_id: 1, name: "Coop", skin: "coop", x: 0, y: 1, layer: "overworld" as const, access: { type: "standard" as const }, interactions: { content: { type: "monster" as const, code: "chicken" } } },
+      ] as GameMap[],
+      [],
+      [{ name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [] }] as Monster[]
+    );
+
+    const eventMap: GameMap = {
+      map_id: 998, name: "Event Spot", skin: "event", x: 20, y: 20,
+      layer: "overworld" as const,
+      access: { type: "standard" as const },
+      interactions: { content: { type: "monster" as const, code: "event_boss" } },
+    };
+    gameData.applyEvents([{
+      name: "Boss Event", code: "boss_event", map: eventMap,
+      previous_skin: "forest", duration: 3600,
+      expiration: new Date(Date.now() + 3600000).toISOString(),
+      created_at: new Date().toISOString(),
+    }]);
+
+    expect(gameData.findMapsWithMonster("event_boss")).toHaveLength(1);
+    expect(gameData.findMapsWithMonster("chicken")).toHaveLength(1);
+  });
+
+  test("applyEvents with empty array removes previously applied event maps", () => {
+    const gameData = new GameData();
+    gameData.load([], [], []);
+
+    const eventMap: GameMap = {
+      map_id: 997, name: "Event", skin: "event", x: 5, y: 5,
+      layer: "overworld" as const,
+      access: { type: "standard" as const },
+      interactions: { content: { type: "resource" as const, code: "event_tree" } },
+    };
+    gameData.applyEvents([{
+      name: "Tree Event", code: "tree_event", map: eventMap,
+      previous_skin: "forest", duration: 3600,
+      expiration: new Date(Date.now() + 3600000).toISOString(),
+      created_at: new Date().toISOString(),
+    }]);
+    expect(gameData.findMapsWithResource("event_tree")).toHaveLength(1);
+
+    gameData.applyEvents([]);
+    expect(gameData.findMapsWithResource("event_tree")).toHaveLength(0);
+  });
+
   test("getItemsForSkill returns all recipes for a skill up to level", () => {
     const gameData = new GameData();
     gameData.load([], [], [], [
@@ -601,5 +684,358 @@ describe("GameData", () => {
     const recipes = gameData.getItemsForSkill("weaponcrafting", 5);
     expect(recipes).toHaveLength(1);
     expect(recipes[0].code).toBe("copper_dagger");
+  });
+
+  // === isTaskAchievable tests ===
+
+  test("isTaskAchievable returns false for monster task above combat level", () => {
+    const gameData = new GameData();
+    gameData.load(
+      [
+        { map_id: 1, name: "Dragon Lair", skin: "cave", x: 5, y: 5, layer: "overworld" as const, access: { type: "standard" as const }, interactions: { content: { type: "monster" as const, code: "dragon" } } },
+      ] as GameMap[],
+      [],
+      [{ name: "Dragon", code: "dragon", level: 30, type: "normal", hp: 500, attack_fire: 50, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 10, max_gold: 50, drops: [] }] as Monster[]
+    );
+
+    const skills = { combat: 5 };
+    expect(gameData.isTaskAchievable({ code: "dragon", type: "monsters" }, skills, [])).toBe(false);
+  });
+
+  test("isTaskAchievable returns true for achievable monster task", () => {
+    const gameData = new GameData();
+    gameData.load(
+      [
+        { map_id: 1, name: "Coop", skin: "coop", x: 0, y: 1, layer: "overworld" as const, access: { type: "standard" as const }, interactions: { content: { type: "monster" as const, code: "chicken" } } },
+      ] as GameMap[],
+      [],
+      [{ name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [] }] as Monster[]
+    );
+
+    const skills = { combat: 5 };
+    expect(gameData.isTaskAchievable({ code: "chicken", type: "monsters" }, skills, [])).toBe(true);
+  });
+
+  test("isTaskAchievable returns true for achievable item task", () => {
+    const gameData = new GameData();
+    gameData.load(
+      [
+        { map_id: 1, name: "Copper Mine", skin: "mine", x: 2, y: 0, layer: "overworld" as const, access: { type: "standard" as const }, interactions: { content: { type: "resource" as const, code: "copper_rocks" } } },
+      ] as GameMap[],
+      [{ name: "Copper Rocks", code: "copper_rocks", skill: "mining", level: 1, drops: [{ code: "copper_ore", rate: 100, min_quantity: 1, max_quantity: 1 }] }] as Resource[],
+      [],
+      [{ name: "Copper Bar", code: "copper_bar", level: 1, type: "resource", subtype: "bar", description: "", tradeable: true, craft: { skill: "mining", level: 1, items: [{ code: "copper_ore", quantity: 10 }], quantity: 1 } }] as Item[]
+    );
+
+    const skills = { mining: 5, combat: 1 };
+    expect(gameData.isTaskAchievable({ code: "copper_bar", type: "items" }, skills, [])).toBe(true);
+  });
+
+  test("isTaskAchievable returns false for item task with no path", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Iron Sword", code: "iron_sword", level: 10, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 10, items: [{ code: "iron_bar", quantity: 6 }], quantity: 1 } },
+    ] as Item[]);
+
+    const skills = { weaponcrafting: 5, combat: 1 }; // Too low
+    expect(gameData.isTaskAchievable({ code: "iron_sword", type: "items" }, skills, [])).toBe(false);
+  });
+
+  // === findCraftableUpgrade tests ===
+
+  test("findCraftableUpgrade returns craft goal when better item is craftable", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      {
+        name: "Copper Dagger", code: "copper_dagger", level: 1, type: "weapon",
+        subtype: "sword", description: "", tradeable: true,
+        effects: [{ code: "attack_fire", value: 10, description: "" }],
+        craft: { skill: "weaponcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 },
+      },
+    ] as Item[]);
+
+    // Character has no weapon, bank has materials
+    const char = {
+      level: 5, weapon_slot: "",
+      mining_level: 5, woodcutting_level: 5, fishing_level: 5, alchemy_level: 5,
+      weaponcrafting_level: 5, gearcrafting_level: 5, jewelrycrafting_level: 5, cooking_level: 5,
+      shield_slot: "", helmet_slot: "", body_armor_slot: "", leg_armor_slot: "",
+      boots_slot: "", ring1_slot: "", ring2_slot: "", amulet_slot: "",
+      inventory: [],
+    } as unknown as Character;
+    const bank: SimpleItem[] = [{ code: "copper_bar", quantity: 10 }];
+    const goal = gameData.findCraftableUpgrade(char, "combat", bank, 100);
+    expect(goal).not.toBeNull();
+    expect(goal!.type).toBe("craft");
+    if (goal!.type === "craft") expect(goal!.item).toBe("copper_dagger");
+  });
+
+  test("findCraftableUpgrade returns null when no upgrade available", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      {
+        name: "Copper Dagger", code: "copper_dagger", level: 1, type: "weapon",
+        subtype: "sword", description: "", tradeable: true,
+        effects: [{ code: "attack_fire", value: 10, description: "" }],
+        craft: { skill: "weaponcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 },
+      },
+    ] as Item[]);
+
+    // Character already has the best weapon
+    const char = {
+      level: 5, weapon_slot: "copper_dagger",
+      mining_level: 5, woodcutting_level: 5, fishing_level: 5, alchemy_level: 5,
+      weaponcrafting_level: 5, gearcrafting_level: 5, jewelrycrafting_level: 5, cooking_level: 5,
+      shield_slot: "", helmet_slot: "", body_armor_slot: "", leg_armor_slot: "",
+      boots_slot: "", ring1_slot: "", ring2_slot: "", amulet_slot: "",
+      inventory: [],
+    } as unknown as Character;
+    const bank: SimpleItem[] = [{ code: "copper_bar", quantity: 10 }];
+    const goal = gameData.findCraftableUpgrade(char, "combat", bank, 100);
+    expect(goal).toBeNull();
+  });
+
+  test("findCraftableUpgrade returns gather goal when materials missing for upgrade", () => {
+    const gameData = new GameData();
+    gameData.load(
+      [
+        { map_id: 1, name: "Copper Mine", skin: "mine", x: 2, y: 0, layer: "overworld" as const, access: { type: "standard" as const }, interactions: { content: { type: "resource" as const, code: "copper_rocks" } } },
+      ] as GameMap[],
+      [{ name: "Copper Rocks", code: "copper_rocks", skill: "mining", level: 1, drops: [{ code: "copper_ore", rate: 100, min_quantity: 1, max_quantity: 1 }] }] as Resource[],
+      [],
+      [
+        {
+          name: "Copper Bar", code: "copper_bar", level: 1, type: "resource",
+          subtype: "bar", description: "", tradeable: true,
+          craft: { skill: "mining", level: 1, items: [{ code: "copper_ore", quantity: 10 }], quantity: 1 },
+        },
+        {
+          name: "Copper Dagger", code: "copper_dagger", level: 1, type: "weapon",
+          subtype: "sword", description: "", tradeable: true,
+          effects: [{ code: "attack_fire", value: 10, description: "" }],
+          craft: { skill: "weaponcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 },
+        },
+      ] as Item[]
+    );
+
+    const char = {
+      level: 5, weapon_slot: "",
+      mining_level: 5, woodcutting_level: 5, fishing_level: 5, alchemy_level: 5,
+      weaponcrafting_level: 5, gearcrafting_level: 5, jewelrycrafting_level: 5, cooking_level: 5,
+      shield_slot: "", helmet_slot: "", body_armor_slot: "", leg_armor_slot: "",
+      boots_slot: "", ring1_slot: "", ring2_slot: "", amulet_slot: "",
+      inventory: [],
+    } as unknown as Character;
+    // Empty bank — needs to gather copper_ore
+    const goal = gameData.findCraftableUpgrade(char, "combat", [], 100);
+    expect(goal).not.toBeNull();
+    expect(goal!.type).toBe("gather");
+    if (goal!.type === "gather") expect(goal!.resource).toBe("copper_rocks");
+  });
+
+  test("findCraftableUpgrade with multiple activities scores both", () => {
+    const gameData = new GameData();
+    gameData.load(
+      [
+        { map_id: 1, name: "Copper Mine", skin: "mine", x: 2, y: 0, layer: "overworld" as const, access: { type: "standard" as const }, interactions: { content: { type: "resource" as const, code: "copper_rocks" } } },
+      ] as GameMap[],
+      [{ name: "Copper Rocks", code: "copper_rocks", skill: "mining", level: 1, drops: [{ code: "copper_ore", rate: 100, min_quantity: 1, max_quantity: 1 }] }] as Resource[],
+      [],
+      [
+        {
+          name: "Mining Helmet", code: "mining_helmet", level: 1, type: "helmet",
+          subtype: "helmet", description: "", tradeable: true,
+          effects: [{ code: "mining", value: 15, description: "" }],
+          craft: { skill: "gearcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 },
+        },
+        {
+          name: "Copper Bar", code: "copper_bar", level: 1, type: "resource",
+          subtype: "bar", description: "", tradeable: true,
+          craft: { skill: "mining", level: 1, items: [{ code: "copper_ore", quantity: 10 }], quantity: 1 },
+        },
+      ] as Item[]
+    );
+
+    const char = {
+      level: 5, weapon_slot: "", helmet_slot: "",
+      mining_level: 5, woodcutting_level: 5, fishing_level: 5, alchemy_level: 5,
+      weaponcrafting_level: 5, gearcrafting_level: 5, jewelrycrafting_level: 5, cooking_level: 5,
+      shield_slot: "", body_armor_slot: "", leg_armor_slot: "",
+      boots_slot: "", ring1_slot: "", ring2_slot: "", amulet_slot: "",
+      inventory: [],
+    } as unknown as Character;
+
+    // With only "combat", the mining helmet has 0 combat score → no upgrade
+    const combatOnly = gameData.findCraftableUpgrade(char, "combat", [], 100);
+    expect(combatOnly).toBeNull();
+
+    // With ["combat", "gathering:mining"], the mining helmet scores 15 → found as upgrade
+    const both = gameData.findCraftableUpgrade(char, ["combat", "gathering:mining"], [], 100);
+    expect(both).not.toBeNull();
+    // It should resolve through the chain (copper_bar needs copper_ore → gather)
+    expect(both!.type).toBe("gather");
+    if (both!.type === "gather") expect(both!.resource).toBe("copper_rocks");
+  });
+
+  test("findCraftableUpgrade with single activity still works (backward compat)", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      {
+        name: "Copper Dagger", code: "copper_dagger", level: 1, type: "weapon",
+        subtype: "sword", description: "", tradeable: true,
+        effects: [{ code: "attack_fire", value: 10, description: "" }],
+        craft: { skill: "weaponcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 },
+      },
+    ] as Item[]);
+
+    const char = {
+      level: 5, weapon_slot: "",
+      mining_level: 5, woodcutting_level: 5, fishing_level: 5, alchemy_level: 5,
+      weaponcrafting_level: 5, gearcrafting_level: 5, jewelrycrafting_level: 5, cooking_level: 5,
+      shield_slot: "", helmet_slot: "", body_armor_slot: "", leg_armor_slot: "",
+      boots_slot: "", ring1_slot: "", ring2_slot: "", amulet_slot: "",
+      inventory: [],
+    } as unknown as Character;
+    const bank: SimpleItem[] = [{ code: "copper_bar", quantity: 10 }];
+    // Single activity still works
+    const goal = gameData.findCraftableUpgrade(char, "combat", bank, 100);
+    expect(goal).not.toBeNull();
+    expect(goal!.type).toBe("craft");
+    if (goal!.type === "craft") expect(goal!.item).toBe("copper_dagger");
+  });
+
+  // === evaluateBestTaskType tests ===
+
+  test("evaluateBestTaskType returns monsters for combat-focused character", () => {
+    const gameData = new GameData();
+    gameData.load([], [], []);
+    const char = {
+      level: 20, // combat
+      mining_level: 5, woodcutting_level: 5, fishing_level: 5, alchemy_level: 5,
+      weaponcrafting_level: 5, gearcrafting_level: 5, jewelrycrafting_level: 5, cooking_level: 5,
+    } as Character;
+    expect(gameData.evaluateBestTaskType(char)).toBe("monsters");
+  });
+
+  test("evaluateBestTaskType returns items for crafting-focused character", () => {
+    const gameData = new GameData();
+    gameData.load([], [], []);
+    const char = {
+      level: 5, // combat
+      mining_level: 15, woodcutting_level: 15, fishing_level: 15, alchemy_level: 15,
+      weaponcrafting_level: 15, gearcrafting_level: 15, jewelrycrafting_level: 15, cooking_level: 15,
+    } as Character;
+    expect(gameData.evaluateBestTaskType(char)).toBe("items");
+  });
+
+  // === findGEBuyGoal tests ===
+
+  test("findGEBuyGoal returns cheapest order within budget", () => {
+    const gameData = new GameData();
+    gameData.load([], [], []);
+    const orders: GEOrder[] = [
+      { id: "o1", seller: "bob", code: "iron_ore", quantity: 10, price: 5, created_at: "" },
+      { id: "o2", seller: "alice", code: "iron_ore", quantity: 20, price: 3, created_at: "" },
+      { id: "o3", seller: "eve", code: "iron_ore", quantity: 5, price: 10, created_at: "" },
+    ];
+    const goal = gameData.findGEBuyGoal("iron_ore", 100, 15, orders);
+    expect(goal).not.toBeNull();
+    expect(goal!.type).toBe("buy_ge");
+    if (goal!.type === "buy_ge") {
+      expect(goal!.item).toBe("iron_ore");
+      expect(goal!.maxPrice).toBe(3); // cheapest order
+      expect(goal!.quantity).toBe(15); // capped by need
+    }
+  });
+
+  test("findGEBuyGoal returns null when no orders available", () => {
+    const gameData = new GameData();
+    gameData.load([], [], []);
+    const goal = gameData.findGEBuyGoal("iron_ore", 100, 10, []);
+    expect(goal).toBeNull();
+  });
+
+  test("findGEBuyGoal returns null when all orders too expensive", () => {
+    const gameData = new GameData();
+    gameData.load([], [], []);
+    const orders: GEOrder[] = [
+      { id: "o1", seller: "bob", code: "iron_ore", quantity: 10, price: 50, created_at: "" },
+    ];
+    const goal = gameData.findGEBuyGoal("iron_ore", 20, 5, orders);
+    expect(goal).toBeNull();
+  });
+
+  test("findGEBuyGoal returns null when budget too low for total cost", () => {
+    const gameData = new GameData();
+    gameData.load([], [], []);
+    const orders: GEOrder[] = [
+      { id: "o1", seller: "bob", code: "iron_ore", quantity: 10, price: 5, created_at: "" },
+    ];
+    // Price is 5 per unit, 10 units = 50 gold needed, but budget is only 30
+    const goal = gameData.findGEBuyGoal("iron_ore", 30, 10, orders);
+    expect(goal).not.toBeNull();
+    if (goal!.type === "buy_ge") {
+      // Should cap quantity to what we can afford: 30/5 = 6 units
+      expect(goal!.quantity).toBe(6);
+    }
+  });
+
+  // === findGESellGoal tests ===
+
+  test("findGESellGoal identifies excess bank items", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Feather", code: "feather", level: 1, type: "resource", subtype: "misc", description: "", tradeable: true },
+    ] as Item[]);
+    const bankItems: SimpleItem[] = [{ code: "feather", quantity: 50 }];
+    const goal = gameData.findGESellGoal(bankItems, 100);
+    expect(goal).not.toBeNull();
+    expect(goal!.type).toBe("sell_ge");
+    if (goal!.type === "sell_ge") {
+      expect(goal!.item).toBe("feather");
+      expect(goal!.quantity).toBe(40); // 50 - 10 kept
+    }
+  });
+
+  test("findGESellGoal skips items needed by recipes", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Copper Ore", code: "copper_ore", level: 1, type: "resource", subtype: "ore", description: "", tradeable: true },
+      { name: "Copper Bar", code: "copper_bar", level: 1, type: "resource", subtype: "bar", description: "", tradeable: true, craft: { skill: "mining", level: 1, items: [{ code: "copper_ore", quantity: 10 }], quantity: 1 } },
+    ] as Item[]);
+    const bankItems: SimpleItem[] = [{ code: "copper_ore", quantity: 50 }];
+    const goal = gameData.findGESellGoal(bankItems, 100);
+    // copper_ore is needed by copper_bar recipe → should not sell
+    expect(goal).toBeNull();
+  });
+
+  test("findGESellGoal skips non-tradeable items", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Quest Item", code: "quest_item", level: 1, type: "resource", subtype: "misc", description: "", tradeable: false },
+    ] as Item[]);
+    const bankItems: SimpleItem[] = [{ code: "quest_item", quantity: 50 }];
+    const goal = gameData.findGESellGoal(bankItems, 100);
+    expect(goal).toBeNull();
+  });
+
+  test("findGESellGoal skips currency items", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Tasks Coin", code: "tasks_coin", level: 1, type: "currency", subtype: "coin", description: "", tradeable: true },
+    ] as Item[]);
+    const bankItems: SimpleItem[] = [{ code: "tasks_coin", quantity: 50 }];
+    const goal = gameData.findGESellGoal(bankItems, 100);
+    expect(goal).toBeNull();
+  });
+
+  test("findGESellGoal skips items with quantity <= 10", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Feather", code: "feather", level: 1, type: "resource", subtype: "misc", description: "", tradeable: true },
+    ] as Item[]);
+    const bankItems: SimpleItem[] = [{ code: "feather", quantity: 10 }];
+    const goal = gameData.findGESellGoal(bankItems, 100);
+    expect(goal).toBeNull();
   });
 });

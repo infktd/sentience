@@ -1,4 +1,4 @@
-import type { SimpleItem } from "../types";
+import type { SimpleItem, GEOrder } from "../types";
 
 export interface CharacterBoardState {
   currentAction: string;
@@ -18,11 +18,13 @@ export interface BankBoardState {
 export interface BoardSnapshot {
   characters: Record<string, CharacterBoardState>;
   bank: BankBoardState;
+  geOrders: GEOrder[];
 }
 
 export class Board {
   private characters: Record<string, CharacterBoardState> = {};
   private bank: BankBoardState = { items: [], gold: 0, lastUpdated: 0 };
+  private geOrders: GEOrder[] = [];
 
   updateCharacter(name: string, state: CharacterBoardState): void {
     this.characters[name] = { ...state };
@@ -36,9 +38,13 @@ export class Board {
     };
   }
 
+  updateGEOrders(orders: GEOrder[]): void {
+    this.geOrders = orders.map((o) => ({ ...o }));
+  }
+
   getSnapshot(): BoardSnapshot {
     return JSON.parse(
-      JSON.stringify({ characters: this.characters, bank: this.bank })
+      JSON.stringify({ characters: this.characters, bank: this.bank, geOrders: this.geOrders })
     );
   }
 

@@ -7,6 +7,7 @@ describe("Board", () => {
     expect(board.getSnapshot()).toEqual({
       characters: {},
       bank: { items: [], gold: 0, lastUpdated: 0 },
+      geOrders: [],
     });
   });
 

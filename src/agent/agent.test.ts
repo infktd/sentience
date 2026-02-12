@@ -1,6 +1,7 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { Agent } from "./agent";
-import type { Character } from "../types";
+import { GameData } from "./game-data";
+import type { Character, GameMap, Monster, SimpleItem } from "../types";
 import { existsSync, unlinkSync } from "fs";
 
 const TEST_LOG = "logs/test-agent.log";
@@ -114,7 +115,7 @@ describe("Agent", () => {
     expect(override).toEqual({ type: "task_new" });
   });
 
-  test("checkTaskOverride returns null when task is in progress", () => {
+  test("checkTaskOverride returns null when monster task is in progress", () => {
     const char = makeCharacter({
       task: "chicken",
       task_type: "monsters",
@@ -122,6 +123,154 @@ describe("Agent", () => {
       task_total: 100,
     });
     const override = Agent.checkTaskOverride(char);
+    expect(override).toBeNull();
+  });
+
+  test("checkTaskOverride returns task_trade when item task and enough to complete", () => {
+    const char = makeCharacter({
+      task: "ash_plank",
+      task_type: "items",
+      task_progress: 27,
+      task_total: 30,
+      inventory: [{ slot: 0, code: "ash_plank", quantity: 3 }],
+    });
+    const override = Agent.checkTaskOverride(char);
+    expect(override).toEqual({ type: "task_trade" });
+  });
+
+  test("checkTaskOverride returns task_trade when item task and inventory nearly full", () => {
+    const char = makeCharacter({
+      task: "ash_plank",
+      task_type: "items",
+      task_progress: 5,
+      task_total: 30,
+      inventory_max_items: 100,
+      inventory: [
+        { slot: 0, code: "ash_plank", quantity: 5 },
+        { slot: 1, code: "other_stuff", quantity: 91 },
+      ],
+    });
+    // totalQuantity=96 >= 100-5=95 → inventory nearly full
+    const override = Agent.checkTaskOverride(char);
+    expect(override).toEqual({ type: "task_trade" });
+  });
+
+  test("checkTaskOverride does not trade small batch when inventory has space", () => {
+    const char = makeCharacter({
+      task: "ash_plank",
+      task_type: "items",
+      task_progress: 5,
+      task_total: 30,
+      inventory_max_items: 100,
+      inventory: [{ slot: 0, code: "ash_plank", quantity: 3 }],
+    });
+    // Only 3 items, 25 remaining, inventory has tons of space → don't trade yet
+    const override = Agent.checkTaskOverride(char);
+    expect(override).toBeNull();
+  });
+
+  test("checkTaskOverride returns null for item task with no task items in inventory", () => {
+    const char = makeCharacter({
+      task: "ash_plank",
+      task_type: "items",
+      task_progress: 5,
+      task_total: 30,
+      inventory: [{ slot: 0, code: "ash_wood", quantity: 10 }],
+    });
+    const override = Agent.checkTaskOverride(char);
+    expect(override).toBeNull();
+  });
+
+  // === getErrorRecovery tests ===
+
+  test("getErrorRecovery returns deposit_all for 497 (inventory full)", () => {
+    const char = makeCharacter();
+    const goal = { type: "gather" as const, resource: "copper_rocks" };
+    const result = Agent.getErrorRecovery(497, char, goal);
+    expect(result).toEqual({ recovery: { type: "deposit_all" } });
+  });
+
+  test("getErrorRecovery returns task_complete for 475", () => {
+    const char = makeCharacter();
+    const goal = { type: "task_trade" as const };
+    const result = Agent.getErrorRecovery(475, char, goal);
+    expect(result).toEqual({ recovery: { type: "task_complete" } });
+  });
+
+  test("getErrorRecovery returns skip for 478, 493, 473", () => {
+    const char = makeCharacter();
+    const goal = { type: "craft" as const, item: "copper_bar", quantity: 1 };
+    expect(Agent.getErrorRecovery(478, char, goal)).toBe("skip");
+    expect(Agent.getErrorRecovery(493, char, goal)).toBe("skip");
+    expect(Agent.getErrorRecovery(473, char, goal)).toBe("skip");
+  });
+
+  test("getErrorRecovery returns skip for 490 (already equipped)", () => {
+    const char = makeCharacter();
+    const goal = { type: "equip" as const, code: "copper_sword", slot: "weapon" as const };
+    expect(Agent.getErrorRecovery(490, char, goal)).toBe("skip");
+  });
+
+  test("getErrorRecovery returns null for unknown error codes", () => {
+    const char = makeCharacter();
+    const goal = { type: "gather" as const, resource: "copper_rocks" };
+    expect(Agent.getErrorRecovery(999, char, goal)).toBeNull();
+    expect(Agent.getErrorRecovery(500, char, goal)).toBeNull();
+  });
+
+  test("checkTaskOverride prefers task_complete over task_trade when done", () => {
+    const char = makeCharacter({
+      task: "ash_plank",
+      task_type: "items",
+      task_progress: 30,
+      task_total: 30,
+      inventory: [{ slot: 0, code: "ash_plank", quantity: 2 }],
+    });
+    const override = Agent.checkTaskOverride(char);
+    expect(override).toEqual({ type: "task_complete" });
+  });
+
+  test("checkTaskOverride returns task_cancel for unachievable task when has tasks_coin", () => {
+    const gd = new GameData();
+    gd.load(
+      [
+        { map_id: 1, name: "Dragon Lair", skin: "cave", x: 5, y: 5, layer: "overworld" as const, access: { type: "standard" as const }, interactions: { content: { type: "monster" as const, code: "dragon" } } },
+      ] as GameMap[],
+      [],
+      [{ name: "Dragon", code: "dragon", level: 30, type: "normal", hp: 500, attack_fire: 50, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 10, max_gold: 50, drops: [] }] as Monster[]
+    );
+
+    const char = makeCharacter({
+      task: "dragon",
+      task_type: "monsters",
+      task_progress: 0,
+      task_total: 10,
+      level: 5,
+      inventory: [{ slot: 0, code: "tasks_coin", quantity: 3 }],
+    });
+    const override = Agent.checkTaskOverride(char, gd, []);
+    expect(override).toEqual({ type: "task_cancel" });
+  });
+
+  test("checkTaskOverride returns null for unachievable task without tasks_coin", () => {
+    const gd = new GameData();
+    gd.load(
+      [
+        { map_id: 1, name: "Dragon Lair", skin: "cave", x: 5, y: 5, layer: "overworld" as const, access: { type: "standard" as const }, interactions: { content: { type: "monster" as const, code: "dragon" } } },
+      ] as GameMap[],
+      [],
+      [{ name: "Dragon", code: "dragon", level: 30, type: "normal", hp: 500, attack_fire: 50, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 10, max_gold: 50, drops: [] }] as Monster[]
+    );
+
+    const char = makeCharacter({
+      task: "dragon",
+      task_type: "monsters",
+      task_progress: 0,
+      task_total: 10,
+      level: 5,
+      inventory: [], // no tasks_coin
+    });
+    const override = Agent.checkTaskOverride(char, gd, []);
     expect(override).toBeNull();
   });
 });

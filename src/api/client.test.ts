@@ -79,4 +79,65 @@ describe("ApiClient", () => {
 
     globalThis.fetch = originalFetch;
   });
+
+  test("stores cooldown from 499 error response", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(
+        JSON.stringify({ error: { code: 499, message: "The character is in cooldown: 5.50 seconds remaining." } }),
+        { status: 499 }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(client.post("/my/testchar/action/fight", {})).rejects.toThrow(ApiRequestError);
+    expect(client.isOnCooldown("testchar")).toBe(true);
+    expect(client.getCooldownRemaining("testchar")).toBeGreaterThan(4000);
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("initializes cooldown from character state on getCharacter", async () => {
+    const originalFetch = globalThis.fetch;
+    const futureExpiry = new Date(Date.now() + 10000).toISOString();
+    globalThis.fetch = mock(async () => {
+      return new Response(
+        JSON.stringify({
+          data: {
+            name: "testchar",
+            cooldown: 10,
+            cooldown_expiration: futureExpiry,
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as unknown as typeof fetch;
+
+    await client.getCharacter("testchar");
+    expect(client.isOnCooldown("testchar")).toBe(true);
+    expect(client.getCooldownRemaining("testchar")).toBeGreaterThan(8000);
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("does not set cooldown from expired character state", async () => {
+    const originalFetch = globalThis.fetch;
+    const pastExpiry = new Date(Date.now() - 5000).toISOString();
+    globalThis.fetch = mock(async () => {
+      return new Response(
+        JSON.stringify({
+          data: {
+            name: "testchar",
+            cooldown: 0,
+            cooldown_expiration: pastExpiry,
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as unknown as typeof fetch;
+
+    await client.getCharacter("testchar");
+    expect(client.isOnCooldown("testchar")).toBe(false);
+
+    globalThis.fetch = originalFetch;
+  });
 });

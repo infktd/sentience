@@ -1,6 +1,7 @@
 import type { Character, Goal, SimpleItem } from "../types";
 import type { BoardSnapshot } from "../board/board";
 import type { GameData } from "../agent/game-data";
+import type { ActivityType } from "../equipment/evaluator";
 
 interface SkillEntry {
   skill: string;
@@ -20,6 +21,20 @@ function getSkillLevels(state: Character): SkillEntry[] {
     { skill: "cooking", level: state.cooking_level, type: "crafting" },
     { skill: "combat", level: state.level, type: "combat" },
   ];
+}
+
+function getSkillLevelsMap(state: Character): Record<string, number> {
+  return {
+    mining: state.mining_level,
+    woodcutting: state.woodcutting_level,
+    fishing: state.fishing_level,
+    alchemy: state.alchemy_level,
+    weaponcrafting: state.weaponcrafting_level,
+    gearcrafting: state.gearcrafting_level,
+    jewelrycrafting: state.jewelrycrafting_level,
+    cooking: state.cooking_level,
+    combat: state.level,
+  };
 }
 
 function getOthersTargets(board: BoardSnapshot, selfName: string): Set<string> {
@@ -141,10 +156,49 @@ export function maxAllSkills(
       const npcBuy = findNpcBuyGoal(entry.skill, entry.level, bankItems, gameData);
       if (npcBuy) return npcBuy;
 
-      // No materials available — skip to next skill
+      // No materials in bank — use chain resolution to gather/fight for them
+      const recipes = gameData.getItemsForSkill(entry.skill, entry.level);
+      recipes.sort((a, b) => (b.craft!.level ?? 0) - (a.craft!.level ?? 0));
+      const skillLevels = getSkillLevelsMap(state);
+      for (const recipe of recipes) {
+        for (const mat of recipe.craft?.items ?? []) {
+          const bankQty = bankItems.find((b) => b.code === mat.code)?.quantity ?? 0;
+          if (bankQty >= mat.quantity) continue;
+          const chainGoal = gameData.resolveItemChain(
+            mat.code, bankItems, skillLevels, freeInventory
+          );
+          if (chainGoal) return chainGoal;
+
+          // Chain couldn't resolve — try buying from GE
+          const needed = mat.quantity - bankQty;
+          const geGoal = gameData.findGEBuyGoal(mat.code, board.bank.gold, needed, board.geOrders);
+          if (geGoal) return geGoal;
+        }
+      }
+
+      // Chain couldn't resolve — fall through to next skill
       continue;
     }
   }
+
+  // Last resort: check if we can craft an equipment upgrade
+  const gatheringSkills: { skill: string; level: number }[] = [
+    { skill: "mining", level: state.mining_level },
+    { skill: "woodcutting", level: state.woodcutting_level },
+    { skill: "fishing", level: state.fishing_level },
+    { skill: "alchemy", level: state.alchemy_level },
+  ];
+  gatheringSkills.sort((a, b) => a.level - b.level);
+  const upgradeActivities: ActivityType[] = ["combat"];
+  if (gatheringSkills.length > 0) {
+    upgradeActivities.push(`gathering:${gatheringSkills[0].skill}` as ActivityType);
+  }
+  const upgradeGoal = gameData.findCraftableUpgrade(state, upgradeActivities, bankItems, freeInventory);
+  if (upgradeGoal) return upgradeGoal;
+
+  // Check if bank has sellable excess items
+  const sellGoal = gameData.findGESellGoal(bankItems, board.bank.gold);
+  if (sellGoal) return sellGoal;
 
   return { type: "idle", reason: "no valid goal found" };
 }

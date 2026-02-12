@@ -21,7 +21,16 @@ import type {
   SimulationResponse,
   SimulationCharacter,
   TaskData,
+  TaskCompleteData,
   TaskRewardData,
+  TaskCancelledData,
+  TaskTradeData,
+  ActiveEvent,
+  TaskDefinition,
+  GEOrder,
+  GEBuyData,
+  GESellData,
+  GECancelData,
 } from "../types";
 
 const BASE_URL = "https://api.artifactsmmo.com";
@@ -124,6 +133,17 @@ export class ApiClient {
 
     if (!response.ok) {
       const err = json.error ?? { code: response.status, message: "Unknown error" };
+
+      // For 499 (cooldown), parse remaining time and track it
+      if (err.code === 499) {
+        const timeMatch = (err.message as string).match(/([\d.]+) seconds remaining/);
+        const nameMatch = path.match(/^\/my\/([^/]+)\//);
+        if (timeMatch && nameMatch) {
+          const remainingMs = parseFloat(timeMatch[1]) * 1000;
+          this.setCooldown(nameMatch[1], Date.now() + remainingMs);
+        }
+      }
+
       throw new ApiRequestError(response.status, err.code, err.message, err.data);
     }
 
@@ -154,6 +174,13 @@ export class ApiClient {
 
   async getCharacter(name: string): Promise<Character> {
     const res = await this.get<{ data: Character }>(`/characters/${name}`);
+    // Initialize cooldown tracking from character state
+    if (res.data.cooldown_expiration) {
+      const expiresAt = new Date(res.data.cooldown_expiration).getTime();
+      if (expiresAt > Date.now()) {
+        this.setCooldown(name, expiresAt);
+      }
+    }
     return res.data;
   }
 
@@ -319,9 +346,9 @@ export class ApiClient {
     return res.data;
   }
 
-  async taskComplete(name: string): Promise<TaskData> {
+  async taskComplete(name: string): Promise<TaskCompleteData> {
     await this.waitForCooldown(name);
-    const res = await this.post<ApiResponse<TaskData>>(
+    const res = await this.post<ApiResponse<TaskCompleteData>>(
       `/my/${name}/action/task/complete`
     );
     this.handleCooldown(name, res.data.cooldown);
@@ -337,13 +364,35 @@ export class ApiClient {
     return res.data;
   }
 
-  async taskCancel(name: string): Promise<TaskData> {
+  async taskTrade(name: string, code: string, quantity: number): Promise<TaskTradeData> {
     await this.waitForCooldown(name);
-    const res = await this.post<ApiResponse<TaskData>>(
+    const res = await this.post<ApiResponse<TaskTradeData>>(
+      `/my/${name}/action/task/trade`,
+      { code, quantity }
+    );
+    this.handleCooldown(name, res.data.cooldown);
+    return res.data;
+  }
+
+  async taskCancel(name: string): Promise<TaskCancelledData> {
+    await this.waitForCooldown(name);
+    const res = await this.post<ApiResponse<TaskCancelledData>>(
       `/my/${name}/action/task/cancel`
     );
     this.handleCooldown(name, res.data.cooldown);
     return res.data;
+  }
+
+  // === Events ===
+
+  async getActiveEvents(page = 1, size = 100): Promise<PaginatedResponse<ActiveEvent>> {
+    return this.get<PaginatedResponse<ActiveEvent>>(`/events/active?page=${page}&size=${size}`);
+  }
+
+  // === Task Definitions ===
+
+  async getTasks(page = 1, size = 100): Promise<PaginatedResponse<TaskDefinition>> {
+    return this.get<PaginatedResponse<TaskDefinition>>(`/tasks/list?page=${page}&size=${size}`);
   }
 
   // === Simulation ===
@@ -357,6 +406,48 @@ export class ApiClient {
       "/simulation/fight_simulation",
       { characters: [character], monster, iterations }
     );
+    return res.data;
+  }
+
+  // === Grand Exchange ===
+
+  async getGEOrders(code?: string, page = 1, size = 100): Promise<PaginatedResponse<GEOrder>> {
+    let path = `/grandexchange/orders?page=${page}&size=${size}`;
+    if (code) path += `&code=${code}`;
+    return this.get<PaginatedResponse<GEOrder>>(path);
+  }
+
+  async getGEOrder(id: string): Promise<ApiResponse<GEOrder>> {
+    return this.get<ApiResponse<GEOrder>>(`/grandexchange/orders/${id}`);
+  }
+
+  async buyGE(name: string, orderId: string, quantity: number): Promise<GEBuyData> {
+    await this.waitForCooldown(name);
+    const res = await this.post<ApiResponse<GEBuyData>>(
+      `/my/${name}/action/grandexchange/buy`,
+      { id: orderId, quantity }
+    );
+    this.handleCooldown(name, res.data.cooldown);
+    return res.data;
+  }
+
+  async sellGE(name: string, code: string, quantity: number, price: number): Promise<GESellData> {
+    await this.waitForCooldown(name);
+    const res = await this.post<ApiResponse<GESellData>>(
+      `/my/${name}/action/grandexchange/sell`,
+      { code, quantity, price }
+    );
+    this.handleCooldown(name, res.data.cooldown);
+    return res.data;
+  }
+
+  async cancelGE(name: string, orderId: string): Promise<GECancelData> {
+    await this.waitForCooldown(name);
+    const res = await this.post<ApiResponse<GECancelData>>(
+      `/my/${name}/action/grandexchange/cancel`,
+      { id: orderId }
+    );
+    this.handleCooldown(name, res.data.cooldown);
     return res.data;
   }
 

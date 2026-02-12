@@ -1,4 +1,5 @@
-import type { GameMap, Resource, Monster, Item, ItemType, SimpleItem, NpcItem, Goal } from "../types";
+import type { GameMap, Resource, Monster, Item, ItemType, SimpleItem, NpcItem, Goal, ActiveEvent, TaskDefinition, Character, ItemSlot, GEOrder } from "../types";
+import { scoreItem, type ActivityType } from "../equipment/evaluator";
 
 const EQUIPMENT_TYPES: Set<ItemType> = new Set([
   "weapon", "shield", "helmet", "body_armor", "leg_armor", "boots",
@@ -7,10 +8,12 @@ const EQUIPMENT_TYPES: Set<ItemType> = new Set([
 
 export class GameData {
   private maps: GameMap[] = [];
+  private eventMaps: GameMap[] = []; // maps added by active events
   private resources: Map<string, Resource> = new Map();
   private monsters: Map<string, Monster> = new Map();
   private items: Map<string, Item> = new Map();
   private npcItems: Map<string, NpcItem> = new Map(); // keyed by product code
+  private tasks: TaskDefinition[] = [];
 
   load(maps: GameMap[], resources: Resource[], monsters: Monster[], items: Item[] = []): void {
     this.maps = maps;
@@ -19,8 +22,22 @@ export class GameData {
     for (const i of items) this.items.set(i.code, i);
   }
 
+  private getAllMaps(): GameMap[] {
+    if (this.eventMaps.length === 0) return this.maps;
+    return [...this.maps, ...this.eventMaps];
+  }
+
+  applyEvents(events: ActiveEvent[]): void {
+    if (events.length === 0) {
+      this.eventMaps = [];
+      return;
+    }
+    // Event maps replace any previously applied event maps
+    this.eventMaps = events.map((e) => e.map);
+  }
+
   findMapsWithResource(resourceCode: string): GameMap[] {
-    return this.maps.filter(
+    return this.getAllMaps().filter(
       (m) =>
         m.interactions.content?.type === "resource" &&
         m.interactions.content.code === resourceCode
@@ -28,7 +45,7 @@ export class GameData {
   }
 
   findMapsWithMonster(monsterCode: string): GameMap[] {
-    return this.maps.filter(
+    return this.getAllMaps().filter(
       (m) =>
         m.interactions.content?.type === "monster" &&
         m.interactions.content.code === monsterCode
@@ -36,7 +53,7 @@ export class GameData {
   }
 
   findMapsWithContent(contentType: string, contentCode?: string): GameMap[] {
-    return this.maps.filter(
+    return this.getAllMaps().filter(
       (m) =>
         m.interactions.content?.type === contentType &&
         (contentCode === undefined || m.interactions.content.code === contentCode)
@@ -111,6 +128,62 @@ export class GameData {
     return results;
   }
 
+  loadTasks(taskDefs: TaskDefinition[]): void {
+    this.tasks = taskDefs;
+  }
+
+  getTaskDefinitions(): TaskDefinition[] {
+    return this.tasks;
+  }
+
+  /**
+   * Check if a task is achievable by a character.
+   * For monster tasks: monster must exist and character level must be high enough.
+   * For item tasks: resolveItemChain must be able to find a path.
+   */
+  isTaskAchievable(
+    task: { code: string; type: "monsters" | "items" },
+    skillLevels: Record<string, number>,
+    bankItems: SimpleItem[]
+  ): boolean {
+    if (task.type === "monsters") {
+      const monster = this.monsters.get(task.code);
+      if (!monster) return false;
+      const combatLevel = skillLevels.combat ?? 0;
+      // Must be within 5 levels to have a reasonable shot
+      if (monster.level > combatLevel + 5) return false;
+      const maps = this.findMapsWithMonster(task.code);
+      return maps.length > 0;
+    }
+
+    if (task.type === "items") {
+      const goal = this.resolveItemChain(task.code, bankItems, skillLevels, 100);
+      return goal !== null;
+    }
+
+    return false;
+  }
+
+  /**
+   * Determine which task type the character is best suited for.
+   * Characters with higher combat vs crafting/gathering go to monsters.
+   */
+  evaluateBestTaskType(character: Character): "monsters" | "items" {
+    const combatLevel = character.level;
+    const avgCraftGather = (
+      character.mining_level +
+      character.woodcutting_level +
+      character.fishing_level +
+      character.alchemy_level +
+      character.weaponcrafting_level +
+      character.gearcrafting_level +
+      character.jewelrycrafting_level +
+      character.cooking_level
+    ) / 8;
+
+    return combatLevel >= avgCraftGather ? "monsters" : "items";
+  }
+
   loadNpcItems(npcItems: NpcItem[]): void {
     for (const ni of npcItems) {
       if (ni.buy_price !== null) {
@@ -124,7 +197,7 @@ export class GameData {
   }
 
   findNpcMap(npcCode: string): GameMap | undefined {
-    return this.maps.find(
+    return this.getAllMaps().find(
       (m) =>
         m.interactions.content?.type === "npc" &&
         m.interactions.content.code === npcCode
@@ -334,8 +407,166 @@ export class GameData {
     return null; // Can't resolve this item
   }
 
+  private static readonly SLOT_TO_ITEM_TYPE: Record<string, ItemType> = {
+    weapon: "weapon",
+    shield: "shield",
+    helmet: "helmet",
+    body_armor: "body_armor",
+    leg_armor: "leg_armor",
+    boots: "boots",
+    ring1: "ring",
+    ring2: "ring",
+    amulet: "amulet",
+  };
+
+  private static readonly CHAR_SLOT_FIELDS: Record<string, keyof Character> = {
+    weapon: "weapon_slot",
+    shield: "shield_slot",
+    helmet: "helmet_slot",
+    body_armor: "body_armor_slot",
+    leg_armor: "leg_armor_slot",
+    boots: "boots_slot",
+    ring1: "ring1_slot",
+    ring2: "ring2_slot",
+    amulet: "amulet_slot",
+  };
+
+  /**
+   * Find a craftable equipment upgrade for a character.
+   * Scans all equipment slots, compares current score to craftable items.
+   * Returns a craft/gather/fight goal if an upgrade path exists, null otherwise.
+   */
+  findCraftableUpgrade(
+    character: Character,
+    activity: ActivityType | ActivityType[],
+    bankItems: SimpleItem[],
+    freeInventory: number
+  ): Goal | null {
+    const activities = Array.isArray(activity) ? activity : [activity];
+    const skillLevels: Record<string, number> = {
+      mining: character.mining_level,
+      woodcutting: character.woodcutting_level,
+      fishing: character.fishing_level,
+      alchemy: character.alchemy_level,
+      weaponcrafting: character.weaponcrafting_level,
+      gearcrafting: character.gearcrafting_level,
+      jewelrycrafting: character.jewelrycrafting_level,
+      cooking: character.cooking_level,
+      combat: character.level,
+    };
+
+    let bestUpgradeGoal: Goal | null = null;
+    let bestImprovement = 0;
+
+    for (const act of activities) {
+      for (const [slot, itemType] of Object.entries(GameData.SLOT_TO_ITEM_TYPE)) {
+        const field = GameData.CHAR_SLOT_FIELDS[slot];
+        const currentCode = field ? (character[field] as string) : "";
+        const currentItem = currentCode ? this.getItemByCode(currentCode) : undefined;
+        const currentScore = currentItem ? scoreItem(currentItem, act) : 0;
+
+        // Scan all craftable items of this type
+        for (const item of this.items.values()) {
+          if (item.type !== itemType) continue;
+          if (!item.craft?.items) continue;
+          if (item.level > character.level) continue;
+          if ((item.craft.level ?? 0) > (skillLevels[item.craft.skill!] ?? 0)) continue;
+
+          const candidateScore = scoreItem(item, act);
+          if (candidateScore <= 0) continue;
+
+          const improvement = candidateScore - currentScore;
+          // Must be 20%+ improvement (or empty slot with positive score)
+          const meetsThreshold = currentScore === 0
+            ? candidateScore > 0
+            : improvement / currentScore >= 0.2;
+
+          if (meetsThreshold && improvement > bestImprovement) {
+            // Try to resolve the crafting chain
+            const goal = this.resolveItemChain(
+              item.code, bankItems, skillLevels, freeInventory
+            );
+            if (goal) {
+              bestUpgradeGoal = goal;
+              bestImprovement = improvement;
+            }
+          }
+        }
+      }
+    }
+
+    return bestUpgradeGoal;
+  }
+
+  /**
+   * Find a GE buy goal for an item. Checks available orders, returns cheapest within budget.
+   */
+  findGEBuyGoal(
+    itemCode: string,
+    maxPrice: number,
+    quantity: number,
+    geOrders: GEOrder[]
+  ): Goal | null {
+    const matching = geOrders
+      .filter((o) => o.code === itemCode && o.price <= maxPrice && o.quantity > 0)
+      .sort((a, b) => a.price - b.price);
+
+    if (matching.length === 0) return null;
+
+    const cheapest = matching[0];
+    const affordableQty = Math.floor(maxPrice / cheapest.price);
+    if (affordableQty <= 0) return null;
+    const buyQty = Math.min(quantity, cheapest.quantity, affordableQty);
+
+    return { type: "buy_ge", item: itemCode, maxPrice: cheapest.price, quantity: buyQty };
+  }
+
+  /**
+   * Find excess bank items worth selling on the GE.
+   * Excess = quantity > 10, tradeable, not currency, not needed by any recipe.
+   */
+  findGESellGoal(bankItems: SimpleItem[], bankGold: number): Goal | null {
+    // Build set of items needed by any recipe
+    const neededItems = new Set<string>();
+    for (const item of this.items.values()) {
+      if (!item.craft?.items) continue;
+      for (const mat of item.craft.items) {
+        neededItems.add(mat.code);
+      }
+    }
+
+    let bestItem: { code: string; quantity: number; value: number } | null = null;
+
+    for (const bi of bankItems) {
+      if (bi.quantity <= 10) continue;
+      if (neededItems.has(bi.code)) continue;
+
+      const item = this.items.get(bi.code);
+      if (!item) continue;
+      if (!item.tradeable) continue;
+      if (item.type === "currency") continue;
+
+      const sellQty = Math.min(bi.quantity - 10, 100); // keep 10, max 100 per order
+      // Estimate price: use item level as rough proxy (1 gold per level, min 1)
+      const price = Math.max(item.level, 1);
+      const tax = Math.max(Math.ceil(price * sellQty * 0.03), 1);
+      // Need gold to cover tax — skip if can't afford
+      if (bankGold < tax) continue;
+
+      const value = price * sellQty;
+      if (!bestItem || value > bestItem.value) {
+        bestItem = { code: bi.code, quantity: sellQty, value };
+      }
+    }
+
+    if (!bestItem) return null;
+
+    const price = Math.max(this.items.get(bestItem.code)?.level ?? 1, 1);
+    return { type: "sell_ge", item: bestItem.code, price, quantity: bestItem.quantity };
+  }
+
   findTasksMaster(taskType: string): GameMap | undefined {
-    return this.maps.find(
+    return this.getAllMaps().find(
       (m) =>
         m.interactions.content?.type === "tasks_master" &&
         m.interactions.content.code === taskType

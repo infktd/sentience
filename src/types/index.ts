@@ -540,12 +540,116 @@ export interface TaskData {
   character: Character;
 }
 
+export interface TaskCompleteData {
+  cooldown: Cooldown;
+  rewards: {
+    items: SimpleItem[];
+    gold: number;
+  };
+  character: Character;
+}
+
 export interface TaskRewardData {
   cooldown: Cooldown;
-  reward: {
+  rewards: {
+    items: SimpleItem[];
+    gold: number;
+  };
+  character: Character;
+}
+
+export interface TaskCancelledData {
+  cooldown: Cooldown;
+  character: Character;
+}
+
+export interface TaskTradeData {
+  cooldown: Cooldown;
+  trade: {
     code: string;
     quantity: number;
   };
+  character: Character;
+}
+
+// === Events ===
+
+export interface ActiveEvent {
+  name: string;
+  code: string;
+  map: GameMap;
+  previous_skin: string;
+  duration: number;
+  expiration: string;
+  created_at: string;
+}
+
+// === Task Definitions ===
+
+export interface TaskDefinition {
+  code: string;
+  level: number;
+  type: "monsters" | "items";
+  min_quantity: number;
+  max_quantity: number;
+  skill?: string;
+  rewards: { code: string; quantity: number }[];
+}
+
+// === Grand Exchange ===
+
+export interface GEOrder {
+  id: string;
+  seller: string;
+  code: string;
+  quantity: number;
+  price: number;
+  created_at: string;
+}
+
+export interface GEOrderHistory {
+  order_id: string;
+  seller: string;
+  buyer: string;
+  code: string;
+  quantity: number;
+  price: number;
+  sold_at: string;
+}
+
+export interface GEOrderCreated {
+  id: string;
+  created_at: string;
+  code: string;
+  quantity: number;
+  price: number;
+  total_price: number;
+  tax: number;
+}
+
+export interface GETransaction {
+  id: string;
+  code: string;
+  quantity: number;
+  price: number;
+  total_price: number;
+}
+
+export interface GEBuyData {
+  cooldown: Cooldown;
+  order: GETransaction;
+  character: Character;
+}
+
+export interface GESellData {
+  cooldown: Cooldown;
+  order: GEOrderCreated;
+  character: Character;
+}
+
+export interface GECancelData {
+  cooldown: Cooldown;
+  order: GETransaction;
   character: Character;
 }
 
@@ -556,8 +660,12 @@ export type Goal =
   | { type: "fight"; monster: string }
   | { type: "craft"; item: string; quantity: number }
   | { type: "buy_npc"; npc: string; item: string; quantity: number }
+  | { type: "buy_ge"; item: string; maxPrice: number; quantity: number }
+  | { type: "sell_ge"; item: string; price: number; quantity: number }
   | { type: "task_complete" }
   | { type: "task_new" }
+  | { type: "task_trade" }
+  | { type: "task_cancel" }
   | { type: "rest" }
   | { type: "deposit_all" }
   | { type: "move"; x: number; y: number }
