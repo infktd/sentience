@@ -63,4 +63,19 @@ describe("Agent", () => {
     const override = Agent.checkSurvivalOverride(char);
     expect(override).toBeNull();
   });
+
+  test("getActivityType returns combat for fight goals", () => {
+    expect(Agent.getActivityType({ type: "fight", monster: "chicken" }, undefined)).toBe("combat");
+  });
+
+  test("getActivityType returns gathering skill for gather goals", () => {
+    const resource = { name: "Copper Rocks", code: "copper_rocks", skill: "mining" as const, level: 1, drops: [] };
+    expect(Agent.getActivityType({ type: "gather", resource: "copper_rocks" }, resource)).toBe("gathering:mining");
+  });
+
+  test("getActivityType returns null for non-equipment goals", () => {
+    expect(Agent.getActivityType({ type: "rest" }, undefined)).toBeNull();
+    expect(Agent.getActivityType({ type: "deposit_all" }, undefined)).toBeNull();
+    expect(Agent.getActivityType({ type: "idle", reason: "test" }, undefined)).toBeNull();
+  });
 });

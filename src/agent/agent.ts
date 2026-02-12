@@ -1,10 +1,12 @@
-import type { Character, Goal } from "../types";
+import type { Character, Goal, Resource } from "../types";
 import type { BoardSnapshot } from "../board/board";
 import type { GameData } from "./game-data";
 import type { ApiClient } from "../api/client";
 import type { Board } from "../board/board";
 import type { Logger } from "../logger/logger";
 import { ApiRequestError } from "../api/client";
+import type { ActivityType } from "../equipment/evaluator";
+import { getEquipmentChanges } from "../equipment/manager";
 
 export type Strategy = (
   state: Character,
@@ -23,6 +25,7 @@ export class Agent {
   private running = false;
   private consecutiveFailures = 0;
   private lastFailedGoalType: string | null = null;
+  private lastActivityType: ActivityType | null = null;
 
   constructor(
     name: string,
@@ -38,6 +41,15 @@ export class Agent {
     this.board = board;
     this.gameData = gameData;
     this.logger = logger;
+  }
+
+  static getActivityType(goal: Goal, resource?: Resource): ActivityType | null {
+    if (goal.type === "fight") return "combat";
+    if (goal.type === "gather") {
+      if (resource?.skill) return `gathering:${resource.skill}` as ActivityType;
+      return null;
+    }
+    return null;
   }
 
   static checkSurvivalOverride(state: Character): Goal | null {
@@ -137,6 +149,20 @@ export class Agent {
     } else {
       this.consecutiveFailures = 0;
       this.lastFailedGoalType = null;
+    }
+
+    // Equipment evaluation on activity type change
+    const goalResource = goal.type === "gather"
+      ? this.gameData.getResourceByCode(goal.resource)
+      : undefined;
+    const activityType = Agent.getActivityType(goal, goalResource);
+    if (activityType && activityType !== this.lastActivityType) {
+      try {
+        await this.handleEquipmentSwaps(activityType);
+      } catch (err) {
+        this.logger.error("Equipment swap failed", { error: String(err) });
+      }
+      this.lastActivityType = activityType;
     }
 
     // Update board with current intent
@@ -349,6 +375,52 @@ export class Agent {
         this.state = await this.api.getCharacter(this.name);
         break;
       }
+    }
+
+    this.syncBoard();
+  }
+
+  private async handleEquipmentSwaps(activity: ActivityType): Promise<void> {
+    const bankItems = this.board.getSnapshot().bank.items;
+    const changes = getEquipmentChanges(this.state!, bankItems, this.gameData, activity);
+
+    if (changes.length === 0) return;
+
+    this.logger.info("Swapping gear", {
+      activity,
+      changes: changes.map((c) => ({ slot: c.slot, from: c.unequipCode, to: c.equipCode })),
+    });
+
+    this.board.updateCharacter(this.name, {
+      currentAction: "equipping",
+      target: activity,
+      position: { x: this.state!.x, y: this.state!.y },
+      skillLevels: this.getSkillLevels(),
+      inventoryUsed: this.state!.inventory.filter((s) => s.quantity > 0).length,
+      inventoryMax: this.state!.inventory_max_items,
+    });
+
+    // Move to bank
+    const bank = this.gameData.findNearestBank(this.state!.x, this.state!.y);
+    if (!bank) {
+      this.logger.error("No bank found for equipment swap");
+      return;
+    }
+    if (this.state!.x !== bank.x || this.state!.y !== bank.y) {
+      const moveResult = await this.api.move(this.name, bank.x, bank.y);
+      this.state = moveResult.character;
+    }
+
+    // Execute swaps
+    for (const change of changes) {
+      if (change.unequipCode) {
+        this.state = await this.api.unequip(this.name, change.slot);
+        const depositResult = await this.api.depositItems(this.name, [{ code: change.unequipCode, quantity: 1 }]);
+        this.state = depositResult.character;
+      }
+      const withdrawResult = await this.api.withdrawItems(this.name, [{ code: change.equipCode, quantity: 1 }]);
+      this.state = withdrawResult.character;
+      this.state = await this.api.equip(this.name, change.equipCode, change.slot);
     }
 
     this.syncBoard();
