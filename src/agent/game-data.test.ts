@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { GameData } from "./game-data";
-import type { GameMap, Resource, Monster } from "../types";
+import type { GameMap, Resource, Monster, Item } from "../types";
 
 describe("GameData", () => {
   test("findMapsWithResource returns maps containing a resource", () => {
@@ -91,5 +91,29 @@ describe("GameData", () => {
     const resource = gameData.getResourceByCode("copper_rocks");
     expect(resource).toBeDefined();
     expect(resource!.skill).toBe("mining");
+  });
+
+  test("getItemByCode returns item details", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Copper Sword", code: "copper_sword", level: 1, type: "weapon", subtype: "sword", description: "", tradeable: true, effects: [{ code: "attack_fire", value: 10, description: "" }] },
+    ] as Item[]);
+
+    const item = gameData.getItemByCode("copper_sword");
+    expect(item).toBeDefined();
+    expect(item!.effects![0].value).toBe(10);
+  });
+
+  test("getEquippableItems filters to equipment types", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Copper Sword", code: "copper_sword", level: 1, type: "weapon", subtype: "sword", description: "", tradeable: true },
+      { name: "Copper Ore", code: "copper_ore", level: 1, type: "resource", subtype: "ore", description: "", tradeable: true },
+      { name: "Iron Helmet", code: "iron_helmet", level: 5, type: "helmet", subtype: "helmet", description: "", tradeable: true },
+    ] as Item[]);
+
+    const equippable = gameData.getEquippableItems();
+    expect(equippable).toHaveLength(2);
+    expect(equippable.map(i => i.code).sort()).toEqual(["copper_sword", "iron_helmet"]);
   });
 });

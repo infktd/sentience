@@ -1,14 +1,21 @@
-import type { GameMap, Resource, Monster } from "../types";
+import type { GameMap, Resource, Monster, Item, ItemType } from "../types";
+
+const EQUIPMENT_TYPES: Set<ItemType> = new Set([
+  "weapon", "shield", "helmet", "body_armor", "leg_armor", "boots",
+  "ring", "amulet", "artifact", "rune", "bag",
+]);
 
 export class GameData {
   private maps: GameMap[] = [];
   private resources: Map<string, Resource> = new Map();
   private monsters: Map<string, Monster> = new Map();
+  private items: Map<string, Item> = new Map();
 
-  load(maps: GameMap[], resources: Resource[], monsters: Monster[]): void {
+  load(maps: GameMap[], resources: Resource[], monsters: Monster[], items: Item[] = []): void {
     this.maps = maps;
     for (const r of resources) this.resources.set(r.code, r);
     for (const m of monsters) this.monsters.set(m.code, m);
+    for (const i of items) this.items.set(i.code, i);
   }
 
   findMapsWithResource(resourceCode: string): GameMap[] {
@@ -70,5 +77,13 @@ export class GameData {
 
   getMonstersByLevel(maxLevel: number): Monster[] {
     return [...this.monsters.values()].filter((m) => m.level <= maxLevel);
+  }
+
+  getItemByCode(code: string): Item | undefined {
+    return this.items.get(code);
+  }
+
+  getEquippableItems(): Item[] {
+    return [...this.items.values()].filter((i) => EQUIPMENT_TYPES.has(i.type));
   }
 }
