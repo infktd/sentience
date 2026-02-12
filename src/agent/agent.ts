@@ -249,7 +249,8 @@ export class Agent {
         const itemsToDeposit = this.state!.inventory
           .filter((s) => s.quantity > 0)
           .map((s) => ({ code: s.code, quantity: s.quantity }));
-        if (itemsToDeposit.length === 0) break;
+        const hasGold = this.state!.gold > 0;
+        if (itemsToDeposit.length === 0 && !hasGold) break;
 
         // Move to bank if not there
         const bank = this.gameData.findNearestBank(this.state!.x, this.state!.y);
@@ -262,10 +263,24 @@ export class Agent {
           this.state = moveResult.character;
         }
 
-        const result = await this.api.depositItems(this.name, itemsToDeposit);
-        this.state = result.character;
-        this.board.updateBank(result.bank, this.board.getSnapshot().bank.gold);
-        this.logger.info("Deposited items", { count: itemsToDeposit.length });
+        if (itemsToDeposit.length > 0) {
+          const result = await this.api.depositItems(this.name, itemsToDeposit);
+          this.state = result.character;
+          this.board.updateBank(result.bank, this.board.getSnapshot().bank.gold);
+          this.logger.info("Deposited items", { count: itemsToDeposit.length });
+        }
+
+        // Deposit gold
+        if (this.state!.gold > 0) {
+          await this.api.waitForCooldown(this.name);
+          const goldResult = await this.api.depositGold(this.name, this.state!.gold);
+          this.state = goldResult.character;
+          this.board.updateBank(
+            this.board.getSnapshot().bank.items,
+            goldResult.bank.quantity
+          );
+          this.logger.info("Deposited gold", { amount: goldResult.bank.quantity });
+        }
         break;
       }
 
@@ -379,12 +394,13 @@ export class Agent {
 
         // Withdraw materials from bank if needed
         if (materials.length > 0) {
+          const qty = goal.quantity;
           // Check if we already have materials in inventory
           const needsWithdraw = materials.some((mat) => {
             const inInventory = this.state!.inventory
               .filter((s) => s.code === mat.code)
               .reduce((sum, s) => sum + s.quantity, 0);
-            return inInventory < mat.quantity;
+            return inInventory < mat.quantity * qty;
           });
 
           if (needsWithdraw) {
@@ -400,12 +416,12 @@ export class Agent {
               this.state = moveResult.character;
             }
 
-            // Withdraw materials
+            // Withdraw materials (multiplied by craft quantity)
             for (const mat of materials) {
               const inInventory = this.state!.inventory
                 .filter((s) => s.code === mat.code)
                 .reduce((sum, s) => sum + s.quantity, 0);
-              const needed = mat.quantity - inInventory;
+              const needed = mat.quantity * qty - inInventory;
               if (needed > 0) {
                 await this.api.waitForCooldown(this.name);
                 const withdrawResult = await this.api.withdrawItems(this.name, [{ code: mat.code, quantity: needed }]);

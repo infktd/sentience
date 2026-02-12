@@ -137,6 +137,30 @@ export class GameData {
     );
   }
 
+  getMaxCraftQuantity(itemCode: string, bankItems: SimpleItem[], inventoryCapacity: number): number {
+    const item = this.items.get(itemCode);
+    if (!item?.craft?.items) return 1;
+
+    const bankMap = new Map<string, number>();
+    for (const bi of bankItems) bankMap.set(bi.code, bi.quantity);
+
+    // Max based on available materials
+    let maxByMaterials = Infinity;
+    let materialsPerCraft = 0;
+    for (const mat of item.craft.items) {
+      const available = bankMap.get(mat.code) ?? 0;
+      maxByMaterials = Math.min(maxByMaterials, Math.floor(available / mat.quantity));
+      materialsPerCraft += mat.quantity;
+    }
+
+    // Max based on inventory space (need to carry all materials)
+    const maxByInventory = materialsPerCraft > 0
+      ? Math.floor(inventoryCapacity / materialsPerCraft)
+      : 1;
+
+    return Math.max(1, Math.min(maxByMaterials, maxByInventory));
+  }
+
   findResourceForDrop(itemCode: string): Resource | undefined {
     for (const resource of this.resources.values()) {
       if (resource.drops.some((d) => d.code === itemCode)) {

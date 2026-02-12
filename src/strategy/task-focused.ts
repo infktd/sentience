@@ -27,7 +27,7 @@ export function taskFocused(
   }
 
   if (state.task_type === "items") {
-    return handleItemTask(state, board, gameData);
+    return handleItemTask(state, board, gameData, state.inventory_max_items);
   }
 
   // Unknown task type — fall back
@@ -52,7 +52,8 @@ function handleMonsterTask(
 function handleItemTask(
   state: Character,
   board: BoardSnapshot,
-  gameData: GameData
+  gameData: GameData,
+  inventoryCapacity: number
 ): Goal {
   const taskItem = state.task;
   const bankItems = board.bank.items;
@@ -67,7 +68,8 @@ function handleItemTask(
       bankItems
     );
     if (craftable.some((c) => c.code === taskItem)) {
-      return { type: "craft", item: taskItem, quantity: 1 };
+      const qty = gameData.getMaxCraftQuantity(taskItem, bankItems, inventoryCapacity);
+      return { type: "craft", item: taskItem, quantity: qty };
     }
 
     // If not craftable, try to gather the missing materials

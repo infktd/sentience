@@ -211,6 +211,37 @@ describe("GameData", () => {
     expect(gameData.getNpcItemForProduct("nonexistent")).toBeUndefined();
   });
 
+  test("getMaxCraftQuantity returns max based on bank materials", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Copper Bar", code: "copper_bar", level: 1, type: "resource", subtype: "bar", description: "", tradeable: true, craft: { skill: "mining", level: 1, items: [{ code: "copper_ore", quantity: 10 }], quantity: 1 } },
+    ] as Item[]);
+
+    // 50 ore → can craft 5 bars (10 ore each)
+    const bank: SimpleItem[] = [{ code: "copper_ore", quantity: 50 }];
+    expect(gameData.getMaxCraftQuantity("copper_bar", bank, 200)).toBe(5);
+
+    // Limited by inventory: can only carry 30 items
+    expect(gameData.getMaxCraftQuantity("copper_bar", bank, 30)).toBe(3);
+
+    // No materials
+    expect(gameData.getMaxCraftQuantity("copper_bar", [], 200)).toBe(1);
+  });
+
+  test("getMaxCraftQuantity handles multi-material recipes", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Life Ring", code: "life_ring", level: 15, type: "ring", subtype: "ring", description: "", tradeable: true, craft: { skill: "jewelrycrafting", level: 15, items: [{ code: "iron_bar", quantity: 8 }, { code: "cloth", quantity: 2 }], quantity: 1 } },
+    ] as Item[]);
+
+    // 16 iron_bar + 10 cloth → limited by iron_bar: 16/8=2
+    const bank: SimpleItem[] = [
+      { code: "iron_bar", quantity: 16 },
+      { code: "cloth", quantity: 10 },
+    ];
+    expect(gameData.getMaxCraftQuantity("life_ring", bank, 200)).toBe(2);
+  });
+
   test("findResourceForDrop returns resource that drops an item", () => {
     const gameData = new GameData();
     gameData.load(

@@ -84,7 +84,8 @@ export function maxAllSkills(
       // Check if bank has enough raw materials to refine
       const craftable = gameData.getCraftableItems(entry.skill, entry.level, bankItems);
       if (craftable.length > 0) {
-        return { type: "craft", item: craftable[0].code, quantity: 1 };
+        const qty = gameData.getMaxCraftQuantity(craftable[0].code, bankItems, state.inventory_max_items);
+        return { type: "craft", item: craftable[0].code, quantity: qty };
       }
 
       // Otherwise gather as usual
@@ -118,7 +119,8 @@ export function maxAllSkills(
       // Check bank for craftable recipes
       const craftable = gameData.getCraftableItems(entry.skill, entry.level, bankItems);
       if (craftable.length > 0) {
-        return { type: "craft", item: craftable[0].code, quantity: 1 };
+        const qty = gameData.getMaxCraftQuantity(craftable[0].code, bankItems, state.inventory_max_items);
+        return { type: "craft", item: craftable[0].code, quantity: qty };
       }
 
       // Check if any recipe is almost craftable — missing only NPC-buyable materials
