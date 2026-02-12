@@ -1,0 +1,132 @@
+import { describe, test, expect } from "bun:test";
+import { maxAllSkills } from "./max-all-skills";
+import { GameData } from "../agent/game-data";
+import type { Character, GameMap, Resource, Monster } from "../types";
+import type { BoardSnapshot } from "../board/board";
+
+function makeChar(overrides: Partial<Character> = {}): Character {
+  return {
+    name: "alice", account: "test", skin: "men1", level: 1,
+    xp: 0, max_xp: 100, gold: 0, speed: 0,
+    mining_level: 1, mining_xp: 0, mining_max_xp: 100,
+    woodcutting_level: 1, woodcutting_xp: 0, woodcutting_max_xp: 100,
+    fishing_level: 1, fishing_xp: 0, fishing_max_xp: 100,
+    weaponcrafting_level: 1, weaponcrafting_xp: 0, weaponcrafting_max_xp: 100,
+    gearcrafting_level: 1, gearcrafting_xp: 0, gearcrafting_max_xp: 100,
+    jewelrycrafting_level: 1, jewelrycrafting_xp: 0, jewelrycrafting_max_xp: 100,
+    cooking_level: 1, cooking_xp: 0, cooking_max_xp: 100,
+    alchemy_level: 1, alchemy_xp: 0, alchemy_max_xp: 100,
+    hp: 100, max_hp: 100, haste: 0, critical_strike: 0, wisdom: 0,
+    prospecting: 0, initiative: 0, threat: 0,
+    attack_fire: 0, attack_earth: 0, attack_water: 0, attack_air: 0,
+    dmg: 0, dmg_fire: 0, dmg_earth: 0, dmg_water: 0, dmg_air: 0,
+    res_fire: 0, res_earth: 0, res_water: 0, res_air: 0,
+    effects: [], x: 0, y: 0, layer: "overworld", map_id: 0,
+    cooldown: 0, cooldown_expiration: new Date().toISOString(),
+    weapon_slot: "", rune_slot: "", shield_slot: "", helmet_slot: "",
+    body_armor_slot: "", leg_armor_slot: "", boots_slot: "",
+    ring1_slot: "", ring2_slot: "", amulet_slot: "",
+    artifact1_slot: "", artifact2_slot: "", artifact3_slot: "",
+    utility1_slot: "", utility1_slot_quantity: 0,
+    utility2_slot: "", utility2_slot_quantity: 0, bag_slot: "",
+    task: "", task_type: "", task_progress: 0, task_total: 0,
+    inventory_max_items: 20, inventory: [],
+    ...overrides,
+  };
+}
+
+function makeGameData(): GameData {
+  const gd = new GameData();
+  gd.load(
+    [
+      { map_id: 1, name: "Copper Mine", skin: "mine", x: 2, y: 0, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "resource", code: "copper_rocks" } } },
+      { map_id: 2, name: "Forest", skin: "forest", x: 0, y: 2, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "resource", code: "ash_tree" } } },
+      { map_id: 3, name: "Pond", skin: "pond", x: 3, y: 0, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "resource", code: "gudgeon_fishing_spot" } } },
+      { map_id: 4, name: "Chicken Coop", skin: "coop", x: 0, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "monster", code: "chicken" } } },
+      { map_id: 5, name: "Bank", skin: "bank", x: 4, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "bank", code: "bank" } } },
+    ] as GameMap[],
+    [
+      { name: "Copper Rocks", code: "copper_rocks", skill: "mining", level: 1, drops: [] },
+      { name: "Ash Tree", code: "ash_tree", skill: "woodcutting", level: 1, drops: [] },
+      { name: "Gudgeon Spot", code: "gudgeon_fishing_spot", skill: "fishing", level: 1, drops: [] },
+    ] as Resource[],
+    [
+      { name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [] },
+    ] as Monster[]
+  );
+  return gd;
+}
+
+const emptyBoard: BoardSnapshot = {
+  characters: {},
+  bank: { items: [], gold: 0, lastUpdated: 0 },
+};
+
+describe("maxAllSkills", () => {
+  test("picks lowest skill when all are equal", () => {
+    const char = makeChar();
+    const gd = makeGameData();
+    const goal = maxAllSkills(char, emptyBoard, gd);
+    expect(["gather", "fight"]).toContain(goal.type);
+  });
+
+  test("picks the lowest skill when one is behind", () => {
+    const char = makeChar({
+      mining_level: 5,
+      woodcutting_level: 5,
+      fishing_level: 1,
+      weaponcrafting_level: 5,
+      gearcrafting_level: 5,
+      jewelrycrafting_level: 5,
+      cooking_level: 5,
+      alchemy_level: 5,
+      level: 5,
+    });
+    const gd = makeGameData();
+    const goal = maxAllSkills(char, emptyBoard, gd);
+    expect(goal.type).toBe("gather");
+    if (goal.type === "gather") {
+      expect(goal.resource).toBe("gudgeon_fishing_spot");
+    }
+  });
+
+  test("avoids skill another character is working on", () => {
+    const char = makeChar({
+      mining_level: 5,
+      woodcutting_level: 5,
+      fishing_level: 1,
+      level: 5,
+      weaponcrafting_level: 5,
+      gearcrafting_level: 5,
+      jewelrycrafting_level: 5,
+      cooking_level: 5,
+      alchemy_level: 5,
+    });
+    const board: BoardSnapshot = {
+      characters: {
+        bob: {
+          currentAction: "gathering",
+          target: "fishing",
+          position: { x: 0, y: 0 },
+          skillLevels: { fishing: 1 },
+          inventoryUsed: 0,
+          inventoryMax: 20,
+        },
+      },
+      bank: { items: [], gold: 0, lastUpdated: 0 },
+    };
+    const gd = makeGameData();
+    const goal = maxAllSkills(char, board, gd);
+    if (goal.type === "gather") {
+      expect(goal.resource).not.toBe("gudgeon_fishing_spot");
+    }
+  });
+
+  test("returns idle when no valid goal found", () => {
+    const char = makeChar();
+    const emptyGd = new GameData();
+    emptyGd.load([], [], []);
+    const goal = maxAllSkills(char, emptyBoard, emptyGd);
+    expect(goal.type).toBe("idle");
+  });
+});
