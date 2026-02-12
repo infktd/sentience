@@ -5,7 +5,7 @@ import { GameData } from "./agent/game-data";
 import { Agent } from "./agent/agent";
 import { Logger } from "./logger/logger";
 import { maxAllSkills } from "./strategy/max-all-skills";
-import type { GameMap, Resource, Monster } from "./types";
+import type { GameMap, Resource, Monster, Item } from "./types";
 
 async function fetchAllPages<T>(
   fetcher: (page: number) => Promise<{ data: T[]; pages: number }>
@@ -33,14 +33,15 @@ async function main() {
 
   // Load game data
   console.log("Loading game data...");
-  const [maps, resources, monsters] = await Promise.all([
+  const [maps, resources, monsters, items] = await Promise.all([
     fetchAllPages<GameMap>((page) => api.getMaps(page)),
     fetchAllPages<Resource>((page) => api.getResources(page)),
     fetchAllPages<Monster>((page) => api.getMonsters(page)),
+    fetchAllPages<Item>((page) => api.getItems(page)),
   ]);
-  gameData.load(maps, resources, monsters);
+  gameData.load(maps, resources, monsters, items);
   console.log(
-    `Game data loaded: ${maps.length} maps, ${resources.length} resources, ${monsters.length} monsters`
+    `Game data loaded: ${maps.length} maps, ${resources.length} resources, ${monsters.length} monsters, ${items.length} items`
   );
 
   // Fetch characters
