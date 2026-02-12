@@ -5,6 +5,7 @@ import { GameData } from "./agent/game-data";
 import { Agent } from "./agent/agent";
 import { Logger } from "./logger/logger";
 import { maxAllSkills } from "./strategy/max-all-skills";
+import { FightSimulator } from "./combat/simulator";
 import type { GameMap, Resource, Monster, Item, NpcItem } from "./types";
 
 async function fetchAllPages<T>(
@@ -57,6 +58,10 @@ async function main() {
     process.exit(1);
   }
 
+  // Create shared simulator
+  const simulator = new FightSimulator(api);
+  console.log("Fight simulator ready");
+
   // Create and start agents
   const agents: Agent[] = [];
   for (const char of characters) {
@@ -67,7 +72,8 @@ async function main() {
       api,
       board,
       gameData,
-      logger
+      logger,
+      simulator
     );
     agents.push(agent);
   }

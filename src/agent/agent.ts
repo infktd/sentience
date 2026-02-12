@@ -7,6 +7,7 @@ import type { Logger } from "../logger/logger";
 import { ApiRequestError } from "../api/client";
 import type { ActivityType } from "../equipment/evaluator";
 import { getEquipmentChanges } from "../equipment/manager";
+import type { FightSimulator } from "../combat/simulator";
 
 export type Strategy = (
   state: Character,
@@ -22,6 +23,7 @@ export class Agent {
   private board: Board;
   private gameData: GameData;
   private logger: Logger;
+  private simulator: FightSimulator | null = null;
   private running = false;
   private consecutiveFailures = 0;
   private lastFailedGoalType: string | null = null;
@@ -33,7 +35,8 @@ export class Agent {
     api: ApiClient,
     board: Board,
     gameData: GameData,
-    logger: Logger
+    logger: Logger,
+    simulator?: FightSimulator
   ) {
     this.name = name;
     this.strategy = strategy;
@@ -41,6 +44,7 @@ export class Agent {
     this.board = board;
     this.gameData = gameData;
     this.logger = logger;
+    this.simulator = simulator ?? null;
   }
 
   static getActivityType(goal: Goal, resource?: Resource): ActivityType | null {
@@ -283,15 +287,45 @@ export class Agent {
       }
 
       case "fight": {
+        // Safety check via simulator
+        let monsterCode = goal.monster;
+        if (this.simulator) {
+          const simResult = await this.simulator.simulate(this.state!, monsterCode);
+          if (simResult.winRate < 0.9) {
+            this.logger.warn("Unsafe fight", {
+              monster: monsterCode,
+              winRate: simResult.winRate,
+            });
+            // Find a safer monster
+            const best = await this.simulator.findBestMonster(this.state!, this.gameData);
+            if (!best) {
+              this.logger.warn("No safe monster found, skipping combat");
+              break;
+            }
+            monsterCode = best.monster.code;
+            this.logger.info("Downgraded fight target", {
+              from: goal.monster,
+              to: monsterCode,
+              winRate: best.result.winRate,
+            });
+          } else {
+            this.logger.info("Fight simulation OK", {
+              monster: monsterCode,
+              winRate: simResult.winRate,
+              avgHpRemaining: simResult.avgFinalHp,
+            });
+          }
+        }
+
         // Find monster location
-        const monsterMaps = this.gameData.findMapsWithMonster(goal.monster);
+        const monsterMaps = this.gameData.findMapsWithMonster(monsterCode);
         const fightTargetMap = this.gameData.findNearestMap(
           this.state!.x,
           this.state!.y,
           monsterMaps
         );
         if (!fightTargetMap) {
-          this.logger.error("No map found for monster", { monster: goal.monster });
+          this.logger.error("No map found for monster", { monster: monsterCode });
           break;
         }
 

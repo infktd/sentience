@@ -481,6 +481,49 @@ export interface Task {
   };
 }
 
+// === Fight Simulation ===
+
+export interface SimulationCharacter {
+  level: number;
+  weapon_slot?: string;
+  shield_slot?: string;
+  helmet_slot?: string;
+  body_armor_slot?: string;
+  leg_armor_slot?: string;
+  boots_slot?: string;
+  rune_slot?: string;
+  ring1_slot?: string;
+  ring2_slot?: string;
+  amulet_slot?: string;
+  artifact1_slot?: string;
+  artifact2_slot?: string;
+  artifact3_slot?: string;
+  utility1_slot?: string;
+  utility1_slot_quantity?: number;
+  utility2_slot?: string;
+  utility2_slot_quantity?: number;
+}
+
+export interface SimulationIterationResult {
+  result: FightResult;
+  turns: number;
+  character_results: {
+    final_hp: number;
+    utility1_slot_quantity: number;
+    utility2_slot_quantity: number;
+  }[];
+}
+
+export interface SimulationResponse {
+  results: SimulationIterationResult[];
+}
+
+export interface SimulationResult {
+  winRate: number;
+  avgFinalHp: number;
+  avgTurns: number;
+}
+
 // === Goal System ===
 
 export type Goal =

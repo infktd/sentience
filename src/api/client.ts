@@ -18,6 +18,8 @@ import type {
   Cooldown,
   ItemSlot,
   Bank,
+  SimulationResponse,
+  SimulationCharacter,
 } from "../types";
 
 const BASE_URL = "https://api.artifactsmmo.com";
@@ -301,4 +303,19 @@ export class ApiClient {
   async getNpcItems(page = 1, size = 100): Promise<PaginatedResponse<NpcItem>> {
     return this.get<PaginatedResponse<NpcItem>>(`/npcs/items?page=${page}&size=${size}`);
   }
+
+  // === Simulation ===
+
+  async simulateFight(
+    character: SimulationCharacter,
+    monster: string,
+    iterations = 100
+  ): Promise<SimulationResponse> {
+    const res = await this.post<ApiResponse<SimulationResponse>>(
+      "/simulation/fight_simulation",
+      { characters: [character], monster, iterations }
+    );
+    return res.data;
+  }
+
 }
