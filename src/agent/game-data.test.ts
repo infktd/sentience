@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { GameData } from "./game-data";
-import type { GameMap, Resource, Monster, Item, SimpleItem } from "../types";
+import type { GameMap, Resource, Monster, Item, SimpleItem, NpcItem } from "../types";
 
 describe("GameData", () => {
   test("findMapsWithResource returns maps containing a resource", () => {
@@ -188,5 +188,39 @@ describe("GameData", () => {
       { code: "ash_plank", quantity: 5 },
     ];
     expect(gameData.getCraftableItems("weaponcrafting", 5, bankFull)).toHaveLength(1);
+  });
+
+  test("getNpcItemForProduct returns NPC listing for a buyable product", () => {
+    const gameData = new GameData();
+    const npcItems: NpcItem[] = [
+      { code: "cloth", npc: "tailor", currency: "wool", buy_price: 3, sell_price: null },
+      { code: "hard_leather", npc: "tailor", currency: "cowhide", buy_price: 3, sell_price: null },
+    ];
+    gameData.loadNpcItems(npcItems);
+
+    const result = gameData.getNpcItemForProduct("cloth");
+    expect(result).toBeDefined();
+    expect(result!.npc).toBe("tailor");
+    expect(result!.currency).toBe("wool");
+    expect(result!.buy_price).toBe(3);
+  });
+
+  test("getNpcItemForProduct returns undefined for unknown product", () => {
+    const gameData = new GameData();
+    gameData.loadNpcItems([]);
+    expect(gameData.getNpcItemForProduct("nonexistent")).toBeUndefined();
+  });
+
+  test("getItemsForSkill returns all recipes for a skill up to level", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Copper Dagger", code: "copper_dagger", level: 1, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
+      { name: "Iron Sword", code: "iron_sword", level: 10, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 10, items: [{ code: "iron_bar", quantity: 6 }], quantity: 1 } },
+      { name: "Copper Helmet", code: "copper_helmet", level: 1, type: "helmet", subtype: "helmet", description: "", tradeable: true, craft: { skill: "gearcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
+    ] as Item[]);
+
+    const recipes = gameData.getItemsForSkill("weaponcrafting", 5);
+    expect(recipes).toHaveLength(1);
+    expect(recipes[0].code).toBe("copper_dagger");
   });
 });

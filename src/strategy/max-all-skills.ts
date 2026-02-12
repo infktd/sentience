@@ -1,4 +1,4 @@
-import type { Character, Goal } from "../types";
+import type { Character, Goal, SimpleItem } from "../types";
 import type { BoardSnapshot } from "../board/board";
 import type { GameData } from "../agent/game-data";
 
@@ -29,6 +29,39 @@ function getOthersTargets(board: BoardSnapshot, selfName: string): Set<string> {
     if (charState.target) targets.add(charState.target);
   }
   return targets;
+}
+
+function findNpcBuyGoal(
+  skill: string,
+  maxLevel: number,
+  bankItems: SimpleItem[],
+  gameData: GameData
+): Goal | null {
+  const bankMap = new Map<string, number>();
+  for (const bi of bankItems) bankMap.set(bi.code, bi.quantity);
+
+  const recipes = gameData.getItemsForSkill(skill, maxLevel);
+  // Sort by craft level descending — prefer highest level recipe
+  recipes.sort((a, b) => (b.craft!.level ?? 0) - (a.craft!.level ?? 0));
+
+  for (const recipe of recipes) {
+    const materials = recipe.craft?.items ?? [];
+    // Find the first missing material that an NPC can provide
+    for (const mat of materials) {
+      const bankQty = bankMap.get(mat.code) ?? 0;
+      if (bankQty >= mat.quantity) continue; // already have enough
+
+      const npcItem = gameData.getNpcItemForProduct(mat.code);
+      if (!npcItem || npcItem.buy_price === null) continue;
+
+      // Check if bank has enough of the NPC's currency
+      const currencyInBank = bankMap.get(npcItem.currency) ?? 0;
+      if (currencyInBank >= npcItem.buy_price) {
+        return { type: "buy_npc", npc: npcItem.npc, item: mat.code, quantity: 1 };
+      }
+    }
+  }
+  return null;
 }
 
 export function maxAllSkills(
@@ -87,6 +120,11 @@ export function maxAllSkills(
       if (craftable.length > 0) {
         return { type: "craft", item: craftable[0].code, quantity: 1 };
       }
+
+      // Check if any recipe is almost craftable — missing only NPC-buyable materials
+      const npcBuy = findNpcBuyGoal(entry.skill, entry.level, bankItems, gameData);
+      if (npcBuy) return npcBuy;
+
       // No materials available — skip to next skill
       continue;
     }

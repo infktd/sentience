@@ -410,6 +410,85 @@ export class Agent {
         break;
       }
 
+      case "buy_npc": {
+        // Look up NPC item for currency info
+        const npcItem = this.gameData.getNpcItemForProduct(goal.item);
+        if (!npcItem) {
+          this.logger.error("Unknown NPC item", { item: goal.item });
+          break;
+        }
+
+        // Withdraw currency from bank if not gold
+        if (npcItem.currency !== "gold") {
+          const currencyNeeded = npcItem.buy_price! * goal.quantity;
+          const inInventory = this.state!.inventory
+            .filter((s) => s.code === npcItem.currency)
+            .reduce((sum, s) => sum + s.quantity, 0);
+
+          if (inInventory < currencyNeeded) {
+            // Move to bank and withdraw currency
+            const bank = this.gameData.findNearestBank(this.state!.x, this.state!.y);
+            if (!bank) {
+              this.logger.error("No bank found for NPC currency withdrawal");
+              break;
+            }
+            if (this.state!.x !== bank.x || this.state!.y !== bank.y) {
+              await this.api.waitForCooldown(this.name);
+              const moveResult = await this.api.move(this.name, bank.x, bank.y);
+              this.state = moveResult.character;
+            }
+            const needed = currencyNeeded - inInventory;
+            await this.api.waitForCooldown(this.name);
+            const withdrawResult = await this.api.withdrawItems(this.name, [{ code: npcItem.currency, quantity: needed }]);
+            this.state = withdrawResult.character;
+          }
+        }
+
+        // Move to NPC
+        const npcMaps = this.gameData.findNpcMap(goal.npc);
+        if (!npcMaps) {
+          this.logger.error("NPC not found on map", { npc: goal.npc });
+          break;
+        }
+        if (this.state!.x !== npcMaps.x || this.state!.y !== npcMaps.y) {
+          await this.api.waitForCooldown(this.name);
+          const moveResult = await this.api.move(this.name, npcMaps.x, npcMaps.y);
+          this.state = moveResult.character;
+        }
+
+        // Buy from NPC
+        await this.api.waitForCooldown(this.name);
+        const buyResult = await this.api.buyNpc(this.name, goal.item, goal.quantity);
+        this.state = buyResult.character;
+        this.logger.info("Bought from NPC", {
+          npc: goal.npc,
+          item: goal.item,
+          quantity: goal.quantity,
+          currency: buyResult.transaction.currency,
+          totalPrice: buyResult.transaction.total_price,
+        });
+
+        // Deposit purchased items to bank
+        const bankForDeposit = this.gameData.findNearestBank(this.state!.x, this.state!.y);
+        if (bankForDeposit) {
+          if (this.state!.x !== bankForDeposit.x || this.state!.y !== bankForDeposit.y) {
+            await this.api.waitForCooldown(this.name);
+            const moveResult = await this.api.move(this.name, bankForDeposit.x, bankForDeposit.y);
+            this.state = moveResult.character;
+          }
+          const itemsToDeposit = this.state!.inventory
+            .filter((s) => s.code === goal.item && s.quantity > 0)
+            .map((s) => ({ code: s.code, quantity: s.quantity }));
+          if (itemsToDeposit.length > 0) {
+            await this.api.waitForCooldown(this.name);
+            const depositResult = await this.api.depositItems(this.name, itemsToDeposit);
+            this.state = depositResult.character;
+            this.board.updateBank(depositResult.bank, this.board.getSnapshot().bank.gold);
+          }
+        }
+        break;
+      }
+
       case "idle": {
         this.logger.info("Idling", { reason: goal.reason });
         await new Promise((r) => setTimeout(r, 5000));
@@ -478,6 +557,7 @@ export class Agent {
       const item = this.gameData.getItemByCode(goal.item);
       return item?.craft?.skill ?? "crafting";
     }
+    if (goal.type === "buy_npc") return goal.npc;
     return "";
   }
 

@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { maxAllSkills } from "./max-all-skills";
 import { GameData } from "../agent/game-data";
-import type { Character, GameMap, Resource, Monster, Item } from "../types";
+import type { Character, GameMap, Resource, Monster, Item, NpcItem } from "../types";
 import type { BoardSnapshot } from "../board/board";
 
 function makeChar(overrides: Partial<Character> = {}): Character {
@@ -45,6 +45,7 @@ function makeGameData(): GameData {
       { map_id: 4, name: "Chicken Coop", skin: "coop", x: 0, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "monster", code: "chicken" } } },
       { map_id: 5, name: "Bank", skin: "bank", x: 4, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "bank", code: "bank" } } },
       { map_id: 6, name: "Workshop", skin: "workshop", x: 2, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "workshop", code: "workshop" } } },
+      { map_id: 7, name: "Tailor", skin: "tailor", x: 3, y: 3, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "npc", code: "tailor" } } },
     ] as GameMap[],
     [
       { name: "Copper Rocks", code: "copper_rocks", skill: "mining", level: 1, drops: [] },
@@ -61,8 +62,13 @@ function makeGameData(): GameData {
       { name: "Copper Helmet", code: "copper_helmet", level: 1, type: "helmet", subtype: "helmet", description: "", tradeable: true, craft: { skill: "gearcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
       { name: "Copper Ring", code: "copper_ring", level: 1, type: "ring", subtype: "ring", description: "", tradeable: true, craft: { skill: "jewelrycrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
       { name: "Cooked Gudgeon", code: "cooked_gudgeon", level: 1, type: "consumable", subtype: "food", description: "", tradeable: true, craft: { skill: "cooking", level: 1, items: [{ code: "gudgeon", quantity: 1 }], quantity: 1 } },
+      { name: "Life Ring", code: "life_ring", level: 15, type: "ring", subtype: "ring", description: "", tradeable: true, craft: { skill: "jewelrycrafting", level: 15, items: [{ code: "iron_bar", quantity: 8 }, { code: "cloth", quantity: 2 }, { code: "mushroom", quantity: 5 }], quantity: 1 } },
     ] as Item[],
   );
+  gd.loadNpcItems([
+    { code: "cloth", npc: "tailor", currency: "wool", buy_price: 3, sell_price: null },
+    { code: "hard_leather", npc: "tailor", currency: "cowhide", buy_price: 3, sell_price: null },
+  ] as NpcItem[]);
   return gd;
 }
 
@@ -230,5 +236,70 @@ describe("maxAllSkills", () => {
     if (goal.type === "gather") {
       expect(goal.resource).toBe("copper_rocks");
     }
+  });
+
+  test("buys from NPC when crafting recipe needs NPC material and bank has currency", () => {
+    const char = makeChar({
+      mining_level: 20,
+      woodcutting_level: 20,
+      fishing_level: 20,
+      weaponcrafting_level: 20,
+      gearcrafting_level: 20,
+      jewelrycrafting_level: 15, // lowest crafting — life_ring needs cloth
+      cooking_level: 20,
+      alchemy_level: 20,
+      level: 20,
+    });
+    const board: BoardSnapshot = {
+      characters: {},
+      bank: {
+        items: [
+          { code: "iron_bar", quantity: 10 },
+          { code: "mushroom", quantity: 10 },
+          // Has wool (tailor currency) but not cloth (tailor product)
+          { code: "wool", quantity: 10 },
+        ],
+        gold: 0,
+        lastUpdated: Date.now(),
+      },
+    };
+    const gd = makeGameData();
+    const goal = maxAllSkills(char, board, gd);
+    expect(goal.type).toBe("buy_npc");
+    if (goal.type === "buy_npc") {
+      expect(goal.npc).toBe("tailor");
+      expect(goal.item).toBe("cloth");
+      expect(goal.quantity).toBe(1);
+    }
+  });
+
+  test("skips NPC buy when bank lacks currency for the NPC", () => {
+    const char = makeChar({
+      mining_level: 20,
+      woodcutting_level: 20,
+      fishing_level: 20,
+      weaponcrafting_level: 20,
+      gearcrafting_level: 20,
+      jewelrycrafting_level: 15,
+      cooking_level: 20,
+      alchemy_level: 20,
+      level: 20,
+    });
+    const board: BoardSnapshot = {
+      characters: {},
+      bank: {
+        items: [
+          { code: "iron_bar", quantity: 10 },
+          { code: "mushroom", quantity: 10 },
+          // No wool — can't buy cloth from tailor
+        ],
+        gold: 0,
+        lastUpdated: Date.now(),
+      },
+    };
+    const gd = makeGameData();
+    const goal = maxAllSkills(char, board, gd);
+    // Should NOT be buy_npc since we can't afford it
+    expect(goal.type).not.toBe("buy_npc");
   });
 });

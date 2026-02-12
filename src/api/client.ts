@@ -6,6 +6,8 @@ import type {
   RestData,
   BankItemData,
   BankGoldData,
+  NpcTransactionData,
+  NpcItem,
   ApiResponse,
   PaginatedResponse,
   GameMap,
@@ -278,11 +280,25 @@ export class ApiClient {
     return this.get<PaginatedResponse<Item>>(`/items?page=${page}&size=${size}`);
   }
 
+  async buyNpc(name: string, code: string, quantity = 1): Promise<NpcTransactionData> {
+    await this.waitForCooldown(name);
+    const res = await this.post<ApiResponse<NpcTransactionData>>(
+      `/my/${name}/action/npc/buy`,
+      { code, quantity }
+    );
+    this.handleCooldown(name, res.data.cooldown);
+    return res.data;
+  }
+
   async getBankItems(page = 1, size = 100): Promise<PaginatedResponse<SimpleItem>> {
     return this.get<PaginatedResponse<SimpleItem>>(`/my/bank/items?page=${page}&size=${size}`);
   }
 
   async getBank(): Promise<ApiResponse<Bank>> {
     return this.get<ApiResponse<Bank>>("/my/bank");
+  }
+
+  async getNpcItems(page = 1, size = 100): Promise<PaginatedResponse<NpcItem>> {
+    return this.get<PaginatedResponse<NpcItem>>(`/npcs/items?page=${page}&size=${size}`);
   }
 }

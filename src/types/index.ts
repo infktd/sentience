@@ -447,6 +447,28 @@ export interface Bank {
   gold: number;
 }
 
+// === NPC ===
+
+export interface NpcItem {
+  code: string;
+  npc: string;
+  currency: string;
+  buy_price: number | null;
+  sell_price: number | null;
+}
+
+export interface NpcTransactionData {
+  cooldown: Cooldown;
+  transaction: {
+    code: string;
+    quantity: number;
+    currency: string;
+    price: number;
+    total_price: number;
+  };
+  character: Character;
+}
+
 // === Task ===
 
 export interface Task {
@@ -465,6 +487,7 @@ export type Goal =
   | { type: "gather"; resource: string }
   | { type: "fight"; monster: string }
   | { type: "craft"; item: string; quantity: number }
+  | { type: "buy_npc"; npc: string; item: string; quantity: number }
   | { type: "rest" }
   | { type: "deposit_all" }
   | { type: "move"; x: number; y: number }

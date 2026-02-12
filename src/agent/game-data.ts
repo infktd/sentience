@@ -1,4 +1,4 @@
-import type { GameMap, Resource, Monster, Item, ItemType, SimpleItem } from "../types";
+import type { GameMap, Resource, Monster, Item, ItemType, SimpleItem, NpcItem } from "../types";
 
 const EQUIPMENT_TYPES: Set<ItemType> = new Set([
   "weapon", "shield", "helmet", "body_armor", "leg_armor", "boots",
@@ -10,6 +10,7 @@ export class GameData {
   private resources: Map<string, Resource> = new Map();
   private monsters: Map<string, Monster> = new Map();
   private items: Map<string, Item> = new Map();
+  private npcItems: Map<string, NpcItem> = new Map(); // keyed by product code
 
   load(maps: GameMap[], resources: Resource[], monsters: Monster[], items: Item[] = []): void {
     this.maps = maps;
@@ -106,5 +107,31 @@ export class GameData {
 
     results.sort((a, b) => (b.craft!.level ?? 0) - (a.craft!.level ?? 0));
     return results;
+  }
+
+  loadNpcItems(npcItems: NpcItem[]): void {
+    for (const ni of npcItems) {
+      if (ni.buy_price !== null) {
+        this.npcItems.set(ni.code, ni);
+      }
+    }
+  }
+
+  getNpcItemForProduct(code: string): NpcItem | undefined {
+    return this.npcItems.get(code);
+  }
+
+  findNpcMap(npcCode: string): GameMap | undefined {
+    return this.maps.find(
+      (m) =>
+        m.interactions.content?.type === "npc" &&
+        m.interactions.content.code === npcCode
+    );
+  }
+
+  getItemsForSkill(skill: string, maxLevel: number): Item[] {
+    return [...this.items.values()].filter(
+      (i) => i.craft?.skill === skill && (i.craft.level ?? 0) <= maxLevel
+    );
   }
 }
