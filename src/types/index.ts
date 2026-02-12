@@ -340,7 +340,7 @@ export interface Item {
   name: string;
   code: string;
   level: number;
-  type: string;
+  type: ItemType;
   subtype: string;
   description: string;
   conditions?: Condition[];
