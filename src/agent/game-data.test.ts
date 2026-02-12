@@ -211,6 +211,63 @@ describe("GameData", () => {
     expect(gameData.getNpcItemForProduct("nonexistent")).toBeUndefined();
   });
 
+  test("findResourceForDrop returns resource that drops an item", () => {
+    const gameData = new GameData();
+    gameData.load(
+      [],
+      [
+        { name: "Copper Rocks", code: "copper_rocks", skill: "mining", level: 1, drops: [{ code: "copper_ore", rate: 100, min_quantity: 1, max_quantity: 1 }] },
+        { name: "Ash Tree", code: "ash_tree", skill: "woodcutting", level: 1, drops: [{ code: "ash_wood", rate: 100, min_quantity: 1, max_quantity: 1 }] },
+      ] as Resource[],
+      []
+    );
+
+    const resource = gameData.findResourceForDrop("copper_ore");
+    expect(resource).toBeDefined();
+    expect(resource!.code).toBe("copper_rocks");
+    expect(gameData.findResourceForDrop("nonexistent")).toBeUndefined();
+  });
+
+  test("findMonsterForDrop returns monster that drops an item", () => {
+    const gameData = new GameData();
+    gameData.load(
+      [],
+      [],
+      [
+        { name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [{ code: "raw_chicken", rate: 50, min_quantity: 1, max_quantity: 1 }] },
+      ] as Monster[]
+    );
+
+    const monster = gameData.findMonsterForDrop("raw_chicken");
+    expect(monster).toBeDefined();
+    expect(monster!.code).toBe("chicken");
+    expect(gameData.findMonsterForDrop("nonexistent")).toBeUndefined();
+  });
+
+  test("findTasksMaster returns correct tasks master map", () => {
+    const gameData = new GameData();
+    gameData.load(
+      [
+        { map_id: 1, name: "City", skin: "city", x: 1, y: 2, layer: "overworld" as const, access: { type: "standard" as const }, interactions: { content: { type: "tasks_master" as const, code: "monsters" } } },
+        { map_id: 2, name: "Town", skin: "town", x: 4, y: 13, layer: "overworld" as const, access: { type: "standard" as const }, interactions: { content: { type: "tasks_master" as const, code: "items" } } },
+      ] as GameMap[],
+      [],
+      []
+    );
+
+    const monstersMaster = gameData.findTasksMaster("monsters");
+    expect(monstersMaster).toBeDefined();
+    expect(monstersMaster!.x).toBe(1);
+    expect(monstersMaster!.y).toBe(2);
+
+    const itemsMaster = gameData.findTasksMaster("items");
+    expect(itemsMaster).toBeDefined();
+    expect(itemsMaster!.x).toBe(4);
+    expect(itemsMaster!.y).toBe(13);
+
+    expect(gameData.findTasksMaster("nonexistent")).toBeUndefined();
+  });
+
   test("getItemsForSkill returns all recipes for a skill up to level", () => {
     const gameData = new GameData();
     gameData.load([], [], [], [

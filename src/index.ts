@@ -4,7 +4,7 @@ import { Board } from "./board/board";
 import { GameData } from "./agent/game-data";
 import { Agent } from "./agent/agent";
 import { Logger } from "./logger/logger";
-import { maxAllSkills } from "./strategy/max-all-skills";
+import { taskFocused } from "./strategy/task-focused";
 import { FightSimulator } from "./combat/simulator";
 import type { GameMap, Resource, Monster, Item, NpcItem } from "./types";
 
@@ -68,7 +68,7 @@ async function main() {
     const logger = new Logger(char.name);
     const agent = new Agent(
       char.name,
-      maxAllSkills,
+      taskFocused,
       api,
       board,
       gameData,

@@ -136,4 +136,30 @@ export class GameData {
       (i) => i.craft?.skill === skill && (i.craft.level ?? 0) <= maxLevel
     );
   }
+
+  findResourceForDrop(itemCode: string): Resource | undefined {
+    for (const resource of this.resources.values()) {
+      if (resource.drops.some((d) => d.code === itemCode)) {
+        return resource;
+      }
+    }
+    return undefined;
+  }
+
+  findMonsterForDrop(itemCode: string): Monster | undefined {
+    for (const monster of this.monsters.values()) {
+      if (monster.drops.some((d) => d.code === itemCode)) {
+        return monster;
+      }
+    }
+    return undefined;
+  }
+
+  findTasksMaster(taskType: string): GameMap | undefined {
+    return this.maps.find(
+      (m) =>
+        m.interactions.content?.type === "tasks_master" &&
+        m.interactions.content.code === taskType
+    );
+  }
 }

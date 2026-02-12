@@ -20,6 +20,8 @@ import type {
   Bank,
   SimulationResponse,
   SimulationCharacter,
+  TaskData,
+  TaskRewardData,
 } from "../types";
 
 const BASE_URL = "https://api.artifactsmmo.com";
@@ -302,6 +304,44 @@ export class ApiClient {
 
   async getNpcItems(page = 1, size = 100): Promise<PaginatedResponse<NpcItem>> {
     return this.get<PaginatedResponse<NpcItem>>(`/npcs/items?page=${page}&size=${size}`);
+  }
+
+  // === Tasks ===
+
+  async taskNew(name: string): Promise<TaskData> {
+    await this.waitForCooldown(name);
+    const res = await this.post<ApiResponse<TaskData>>(
+      `/my/${name}/action/task/new`
+    );
+    this.handleCooldown(name, res.data.cooldown);
+    return res.data;
+  }
+
+  async taskComplete(name: string): Promise<TaskData> {
+    await this.waitForCooldown(name);
+    const res = await this.post<ApiResponse<TaskData>>(
+      `/my/${name}/action/task/complete`
+    );
+    this.handleCooldown(name, res.data.cooldown);
+    return res.data;
+  }
+
+  async taskExchange(name: string): Promise<TaskRewardData> {
+    await this.waitForCooldown(name);
+    const res = await this.post<ApiResponse<TaskRewardData>>(
+      `/my/${name}/action/task/exchange`
+    );
+    this.handleCooldown(name, res.data.cooldown);
+    return res.data;
+  }
+
+  async taskCancel(name: string): Promise<TaskData> {
+    await this.waitForCooldown(name);
+    const res = await this.post<ApiResponse<TaskData>>(
+      `/my/${name}/action/task/cancel`
+    );
+    this.handleCooldown(name, res.data.cooldown);
+    return res.data;
   }
 
   // === Simulation ===

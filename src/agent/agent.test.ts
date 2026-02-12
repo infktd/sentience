@@ -96,4 +96,32 @@ describe("Agent", () => {
     expect(Agent.getActivityType({ type: "deposit_all" }, undefined)).toBeNull();
     expect(Agent.getActivityType({ type: "idle", reason: "test" }, undefined)).toBeNull();
   });
+
+  test("checkTaskOverride returns task_complete when task is done", () => {
+    const char = makeCharacter({
+      task: "chicken",
+      task_type: "monsters",
+      task_progress: 100,
+      task_total: 100,
+    });
+    const override = Agent.checkTaskOverride(char);
+    expect(override).toEqual({ type: "task_complete" });
+  });
+
+  test("checkTaskOverride returns task_new when no task assigned", () => {
+    const char = makeCharacter({ task: "", task_type: "" });
+    const override = Agent.checkTaskOverride(char);
+    expect(override).toEqual({ type: "task_new" });
+  });
+
+  test("checkTaskOverride returns null when task is in progress", () => {
+    const char = makeCharacter({
+      task: "chicken",
+      task_type: "monsters",
+      task_progress: 50,
+      task_total: 100,
+    });
+    const override = Agent.checkTaskOverride(char);
+    expect(override).toBeNull();
+  });
 });

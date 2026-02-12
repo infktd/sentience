@@ -70,6 +70,18 @@ export class Agent {
     return null;
   }
 
+  static checkTaskOverride(state: Character): Goal | null {
+    // Task completed — go turn it in
+    if (state.task && state.task_progress >= state.task_total) {
+      return { type: "task_complete" };
+    }
+    // No active task — go get one
+    if (!state.task) {
+      return { type: "task_new" };
+    }
+    return null;
+  }
+
   async start(): Promise<void> {
     this.running = true;
     this.logger.info("Agent starting", { name: this.name });
@@ -134,8 +146,15 @@ export class Agent {
       goal = override;
       reason = `survival override: ${goal.type}`;
     } else {
-      goal = this.strategy(this.state, boardSnapshot, this.gameData);
-      reason = "strategy decision";
+      // Check task management (complete/accept)
+      const taskOverride = Agent.checkTaskOverride(this.state);
+      if (taskOverride) {
+        goal = taskOverride;
+        reason = `task management: ${goal.type}`;
+      } else {
+        goal = this.strategy(this.state, boardSnapshot, this.gameData);
+        reason = "strategy decision";
+      }
     }
 
     // Stuck detection
@@ -526,6 +545,85 @@ export class Agent {
         break;
       }
 
+      case "task_complete": {
+        // Move to the correct tasks_master for this task type
+        const taskMasterMap = this.gameData.findTasksMaster(this.state!.task_type);
+        if (!taskMasterMap) {
+          this.logger.error("Tasks master not found", { taskType: this.state!.task_type });
+          break;
+        }
+        if (this.state!.x !== taskMasterMap.x || this.state!.y !== taskMasterMap.y) {
+          const moveResult = await this.api.move(this.name, taskMasterMap.x, taskMasterMap.y);
+          this.state = moveResult.character;
+        }
+
+        // Complete the task
+        await this.api.waitForCooldown(this.name);
+        const completeResult = await this.api.taskComplete(this.name);
+        this.state = completeResult.character;
+        this.logger.info("Task completed", {
+          task: completeResult.task.code,
+          type: completeResult.task.type,
+          rewards: completeResult.task.rewards,
+        });
+
+        // Exchange coins if we have 6+
+        const taskCoins = this.state!.inventory
+          .filter((s) => s.code === "tasks_coin")
+          .reduce((sum, s) => sum + s.quantity, 0);
+        if (taskCoins >= 6) {
+          await this.api.waitForCooldown(this.name);
+          const exchangeResult = await this.api.taskExchange(this.name);
+          this.state = exchangeResult.character;
+          this.logger.info("Exchanged task coins", {
+            reward: exchangeResult.reward.code,
+            quantity: exchangeResult.reward.quantity,
+          });
+        }
+
+        // Accept new task
+        await this.api.waitForCooldown(this.name);
+        const newTaskResult = await this.api.taskNew(this.name);
+        this.state = newTaskResult.character;
+        this.logger.info("New task accepted", {
+          task: newTaskResult.task.code,
+          type: newTaskResult.task.type,
+          total: newTaskResult.task.total,
+        });
+        break;
+      }
+
+      case "task_new": {
+        // Go to nearest tasks_master and accept a task
+        const masters = [
+          this.gameData.findTasksMaster("monsters"),
+          this.gameData.findTasksMaster("items"),
+        ].filter((m) => m !== undefined);
+        const nearestMaster = this.gameData.findNearestMap(
+          this.state!.x,
+          this.state!.y,
+          masters
+        );
+        if (!nearestMaster) {
+          this.logger.error("No tasks master found");
+          break;
+        }
+        if (this.state!.x !== nearestMaster.x || this.state!.y !== nearestMaster.y) {
+          const moveResult = await this.api.move(this.name, nearestMaster.x, nearestMaster.y);
+          this.state = moveResult.character;
+        }
+
+        await this.api.waitForCooldown(this.name);
+        const taskResult = await this.api.taskNew(this.name);
+        this.state = taskResult.character;
+        this.logger.info("New task accepted", {
+          task: taskResult.task.code,
+          type: taskResult.task.type,
+          total: taskResult.task.total,
+        });
+        break;
+      }
+
       case "idle": {
         this.logger.info("Idling", { reason: goal.reason });
         await new Promise((r) => setTimeout(r, 5000));
@@ -595,6 +693,7 @@ export class Agent {
       return item?.craft?.skill ?? "crafting";
     }
     if (goal.type === "buy_npc") return goal.npc;
+    if (goal.type === "task_complete" || goal.type === "task_new") return "task";
     return "";
   }
 

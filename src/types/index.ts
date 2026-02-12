@@ -524,6 +524,31 @@ export interface SimulationResult {
   avgTurns: number;
 }
 
+// === Task Action Responses ===
+
+export interface TaskData {
+  cooldown: Cooldown;
+  task: {
+    code: string;
+    type: TaskType;
+    total: number;
+    rewards: {
+      items: SimpleItem[];
+      gold: number;
+    };
+  };
+  character: Character;
+}
+
+export interface TaskRewardData {
+  cooldown: Cooldown;
+  reward: {
+    code: string;
+    quantity: number;
+  };
+  character: Character;
+}
+
 // === Goal System ===
 
 export type Goal =
@@ -531,6 +556,8 @@ export type Goal =
   | { type: "fight"; monster: string }
   | { type: "craft"; item: string; quantity: number }
   | { type: "buy_npc"; npc: string; item: string; quantity: number }
+  | { type: "task_complete" }
+  | { type: "task_new" }
   | { type: "rest" }
   | { type: "deposit_all" }
   | { type: "move"; x: number; y: number }
