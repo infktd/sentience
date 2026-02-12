@@ -1,4 +1,4 @@
-import type { GameMap, Resource, Monster, Item, ItemType } from "../types";
+import type { GameMap, Resource, Monster, Item, ItemType, SimpleItem } from "../types";
 
 const EQUIPMENT_TYPES: Set<ItemType> = new Set([
   "weapon", "shield", "helmet", "body_armor", "leg_armor", "boots",
@@ -85,5 +85,26 @@ export class GameData {
 
   getEquippableItems(): Item[] {
     return [...this.items.values()].filter((i) => EQUIPMENT_TYPES.has(i.type));
+  }
+
+  getCraftableItems(skill: string, maxLevel: number, bankItems: SimpleItem[]): Item[] {
+    const bankMap = new Map<string, number>();
+    for (const bi of bankItems) bankMap.set(bi.code, bi.quantity);
+
+    const results: Item[] = [];
+    for (const item of this.items.values()) {
+      if (!item.craft) continue;
+      if (item.craft.skill !== skill) continue;
+      if ((item.craft.level ?? 0) > maxLevel) continue;
+
+      const hasAllMaterials = item.craft.items?.every(
+        (mat) => (bankMap.get(mat.code) ?? 0) >= mat.quantity
+      ) ?? false;
+
+      if (hasAllMaterials) results.push(item);
+    }
+
+    results.sort((a, b) => (b.craft!.level ?? 0) - (a.craft!.level ?? 0));
+    return results;
   }
 }

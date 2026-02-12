@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { GameData } from "./game-data";
-import type { GameMap, Resource, Monster, Item } from "../types";
+import type { GameMap, Resource, Monster, Item, SimpleItem } from "../types";
 
 describe("GameData", () => {
   test("findMapsWithResource returns maps containing a resource", () => {
@@ -115,5 +115,78 @@ describe("GameData", () => {
     const equippable = gameData.getEquippableItems();
     expect(equippable).toHaveLength(2);
     expect(equippable.map(i => i.code).sort()).toEqual(["copper_sword", "iron_helmet"]);
+  });
+
+  test("getCraftableItems returns items craftable with available bank materials", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Copper Bar", code: "copper_bar", level: 1, type: "resource", subtype: "bar", description: "", tradeable: true, craft: { skill: "mining", level: 1, items: [{ code: "copper_ore", quantity: 10 }], quantity: 1 } },
+      { name: "Copper Dagger", code: "copper_dagger", level: 1, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
+    ] as Item[]);
+
+    const bankItems: SimpleItem[] = [{ code: "copper_ore", quantity: 15 }];
+    const craftable = gameData.getCraftableItems("mining", 1, bankItems);
+    expect(craftable).toHaveLength(1);
+    expect(craftable[0].code).toBe("copper_bar");
+  });
+
+  test("getCraftableItems returns empty when bank lacks materials", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Copper Bar", code: "copper_bar", level: 1, type: "resource", subtype: "bar", description: "", tradeable: true, craft: { skill: "mining", level: 1, items: [{ code: "copper_ore", quantity: 10 }], quantity: 1 } },
+    ] as Item[]);
+
+    const bankItems: SimpleItem[] = [{ code: "copper_ore", quantity: 5 }];
+    const craftable = gameData.getCraftableItems("mining", 1, bankItems);
+    expect(craftable).toHaveLength(0);
+  });
+
+  test("getCraftableItems respects skill level cap", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Copper Dagger", code: "copper_dagger", level: 1, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
+      { name: "Iron Sword", code: "iron_sword", level: 10, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 10, items: [{ code: "iron_bar", quantity: 6 }], quantity: 1 } },
+    ] as Item[]);
+
+    const bankItems: SimpleItem[] = [
+      { code: "copper_bar", quantity: 10 },
+      { code: "iron_bar", quantity: 10 },
+    ];
+    // Level 5 can only craft the level 1 recipe
+    const craftable = gameData.getCraftableItems("weaponcrafting", 5, bankItems);
+    expect(craftable).toHaveLength(1);
+    expect(craftable[0].code).toBe("copper_dagger");
+  });
+
+  test("getCraftableItems sorts by craft level descending", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Copper Dagger", code: "copper_dagger", level: 1, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
+      { name: "Sticky Sword", code: "sticky_sword", level: 5, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 5, items: [{ code: "copper_bar", quantity: 5 }], quantity: 1 } },
+    ] as Item[]);
+
+    const bankItems: SimpleItem[] = [{ code: "copper_bar", quantity: 20 }];
+    const craftable = gameData.getCraftableItems("weaponcrafting", 10, bankItems);
+    expect(craftable).toHaveLength(2);
+    expect(craftable[0].code).toBe("sticky_sword"); // level 5 first
+    expect(craftable[1].code).toBe("copper_dagger"); // level 1 second
+  });
+
+  test("getCraftableItems handles multi-material recipes", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [], [
+      { name: "Fire Staff", code: "fire_staff", level: 5, type: "weapon", subtype: "staff", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 5, items: [{ code: "red_slimeball", quantity: 2 }, { code: "ash_plank", quantity: 5 }], quantity: 1 } },
+    ] as Item[]);
+
+    // Missing one material
+    const bankMissing: SimpleItem[] = [{ code: "red_slimeball", quantity: 3 }];
+    expect(gameData.getCraftableItems("weaponcrafting", 5, bankMissing)).toHaveLength(0);
+
+    // Both materials present
+    const bankFull: SimpleItem[] = [
+      { code: "red_slimeball", quantity: 3 },
+      { code: "ash_plank", quantity: 5 },
+    ];
+    expect(gameData.getCraftableItems("weaponcrafting", 5, bankFull)).toHaveLength(1);
   });
 });

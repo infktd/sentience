@@ -38,6 +38,7 @@ export function maxAllSkills(
 ): Goal {
   const skills = getSkillLevels(state);
   const othersTargets = getOthersTargets(board, state.name);
+  const bankItems = board.bank.items;
 
   // Sort by level ascending (lowest first)
   const sorted = [...skills].sort((a, b) => a.level - b.level);
@@ -47,15 +48,20 @@ export function maxAllSkills(
     if (othersTargets.has(entry.skill)) continue;
 
     if (entry.type === "gathering") {
-      // Find the best resource for this skill at our level
+      // Check if bank has enough raw materials to refine
+      const craftable = gameData.getCraftableItems(entry.skill, entry.level, bankItems);
+      if (craftable.length > 0) {
+        return { type: "craft", item: craftable[0].code, quantity: 1 };
+      }
+
+      // Otherwise gather as usual
       const resources = gameData
         .getResourcesForSkill(entry.skill)
         .filter((r) => r.level <= entry.level)
-        .sort((a, b) => b.level - a.level); // highest level we can do
+        .sort((a, b) => b.level - a.level);
 
       if (resources.length === 0) continue;
 
-      // Check that a map exists for this resource
       const maps = gameData.findMapsWithResource(resources[0].code);
       if (maps.length === 0) continue;
 
@@ -63,14 +69,12 @@ export function maxAllSkills(
     }
 
     if (entry.type === "combat") {
-      // Find the strongest monster we can reasonably fight
       const monsters = gameData
         .getMonstersByLevel(entry.level)
         .sort((a, b) => b.level - a.level);
 
       if (monsters.length === 0) continue;
 
-      // Check that a map exists for this monster
       const maps = gameData.findMapsWithMonster(monsters[0].code);
       if (maps.length === 0) continue;
 
@@ -78,9 +82,12 @@ export function maxAllSkills(
     }
 
     if (entry.type === "crafting") {
-      // Crafting requires items in inventory - for now, skip and let
-      // gathering/combat build up resources. Crafting strategy will
-      // be enhanced later to check bank contents and craft when possible.
+      // Check bank for craftable recipes
+      const craftable = gameData.getCraftableItems(entry.skill, entry.level, bankItems);
+      if (craftable.length > 0) {
+        return { type: "craft", item: craftable[0].code, quantity: 1 };
+      }
+      // No materials available — skip to next skill
       continue;
     }
   }

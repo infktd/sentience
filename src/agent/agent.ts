@@ -320,7 +320,49 @@ export class Agent {
       }
 
       case "craft": {
-        // Find workshop
+        // Look up recipe for materials
+        const recipe = this.gameData.getItemByCode(goal.item);
+        const materials = recipe?.craft?.items ?? [];
+
+        // Withdraw materials from bank if needed
+        if (materials.length > 0) {
+          // Check if we already have materials in inventory
+          const needsWithdraw = materials.some((mat) => {
+            const inInventory = this.state!.inventory
+              .filter((s) => s.code === mat.code)
+              .reduce((sum, s) => sum + s.quantity, 0);
+            return inInventory < mat.quantity;
+          });
+
+          if (needsWithdraw) {
+            // Move to bank
+            const bank = this.gameData.findNearestBank(this.state!.x, this.state!.y);
+            if (!bank) {
+              this.logger.error("No bank found for material withdrawal");
+              break;
+            }
+            if (this.state!.x !== bank.x || this.state!.y !== bank.y) {
+              await this.api.waitForCooldown(this.name);
+              const moveResult = await this.api.move(this.name, bank.x, bank.y);
+              this.state = moveResult.character;
+            }
+
+            // Withdraw materials
+            for (const mat of materials) {
+              const inInventory = this.state!.inventory
+                .filter((s) => s.code === mat.code)
+                .reduce((sum, s) => sum + s.quantity, 0);
+              const needed = mat.quantity - inInventory;
+              if (needed > 0) {
+                await this.api.waitForCooldown(this.name);
+                const withdrawResult = await this.api.withdrawItems(this.name, [{ code: mat.code, quantity: needed }]);
+                this.state = withdrawResult.character;
+              }
+            }
+          }
+        }
+
+        // Find and move to workshop
         const workshops = this.gameData.findMapsWithContent("workshop");
         const craftTargetMap = this.gameData.findNearestMap(
           this.state!.x,
@@ -331,15 +373,14 @@ export class Agent {
           this.logger.error("No workshop found");
           break;
         }
-
-        // Move if needed
         if (this.state!.x !== craftTargetMap.x || this.state!.y !== craftTargetMap.y) {
+          await this.api.waitForCooldown(this.name);
           const moveResult = await this.api.move(this.name, craftTargetMap.x, craftTargetMap.y);
           this.state = moveResult.character;
-          this.syncBoard();
-          return;
         }
 
+        // Craft
+        await this.api.waitForCooldown(this.name);
         const craftResult = await this.api.craft(this.name, goal.item, goal.quantity);
         this.state = craftResult.character;
         this.logger.info("Crafted", {
@@ -433,7 +474,10 @@ export class Agent {
       return resource?.skill ?? "";
     }
     if (goal.type === "fight") return "combat";
-    if (goal.type === "craft") return "crafting";
+    if (goal.type === "craft") {
+      const item = this.gameData.getItemByCode(goal.item);
+      return item?.craft?.skill ?? "crafting";
+    }
     return "";
   }
 

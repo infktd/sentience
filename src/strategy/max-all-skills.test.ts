@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { maxAllSkills } from "./max-all-skills";
 import { GameData } from "../agent/game-data";
-import type { Character, GameMap, Resource, Monster } from "../types";
+import type { Character, GameMap, Resource, Monster, Item } from "../types";
 import type { BoardSnapshot } from "../board/board";
 
 function makeChar(overrides: Partial<Character> = {}): Character {
@@ -44,6 +44,7 @@ function makeGameData(): GameData {
       { map_id: 3, name: "Pond", skin: "pond", x: 3, y: 0, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "resource", code: "gudgeon_fishing_spot" } } },
       { map_id: 4, name: "Chicken Coop", skin: "coop", x: 0, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "monster", code: "chicken" } } },
       { map_id: 5, name: "Bank", skin: "bank", x: 4, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "bank", code: "bank" } } },
+      { map_id: 6, name: "Workshop", skin: "workshop", x: 2, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "workshop", code: "workshop" } } },
     ] as GameMap[],
     [
       { name: "Copper Rocks", code: "copper_rocks", skill: "mining", level: 1, drops: [] },
@@ -52,7 +53,15 @@ function makeGameData(): GameData {
     ] as Resource[],
     [
       { name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [] },
-    ] as Monster[]
+    ] as Monster[],
+    [
+      { name: "Copper Bar", code: "copper_bar", level: 1, type: "resource", subtype: "bar", description: "", tradeable: true, craft: { skill: "mining", level: 1, items: [{ code: "copper_ore", quantity: 10 }], quantity: 1 } },
+      { name: "Ash Plank", code: "ash_plank", level: 1, type: "resource", subtype: "plank", description: "", tradeable: true, craft: { skill: "woodcutting", level: 1, items: [{ code: "ash_wood", quantity: 10 }], quantity: 1 } },
+      { name: "Copper Dagger", code: "copper_dagger", level: 1, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
+      { name: "Copper Helmet", code: "copper_helmet", level: 1, type: "helmet", subtype: "helmet", description: "", tradeable: true, craft: { skill: "gearcrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
+      { name: "Copper Ring", code: "copper_ring", level: 1, type: "ring", subtype: "ring", description: "", tradeable: true, craft: { skill: "jewelrycrafting", level: 1, items: [{ code: "copper_bar", quantity: 6 }], quantity: 1 } },
+      { name: "Cooked Gudgeon", code: "cooked_gudgeon", level: 1, type: "consumable", subtype: "food", description: "", tradeable: true, craft: { skill: "cooking", level: 1, items: [{ code: "gudgeon", quantity: 1 }], quantity: 1 } },
+    ] as Item[],
   );
   return gd;
 }
@@ -128,5 +137,98 @@ describe("maxAllSkills", () => {
     emptyGd.load([], [], []);
     const goal = maxAllSkills(char, emptyBoard, emptyGd);
     expect(goal.type).toBe("idle");
+  });
+
+  test("crafts when crafting skill is lowest and bank has materials", () => {
+    const char = makeChar({
+      mining_level: 5,
+      woodcutting_level: 5,
+      fishing_level: 5,
+      weaponcrafting_level: 1, // lowest
+      gearcrafting_level: 5,
+      jewelrycrafting_level: 5,
+      cooking_level: 5,
+      alchemy_level: 5,
+      level: 5,
+    });
+    const board: BoardSnapshot = {
+      characters: {},
+      bank: { items: [{ code: "copper_bar", quantity: 10 }], gold: 0, lastUpdated: Date.now() },
+    };
+    const gd = makeGameData();
+    const goal = maxAllSkills(char, board, gd);
+    expect(goal.type).toBe("craft");
+    if (goal.type === "craft") {
+      expect(goal.item).toBe("copper_dagger");
+      expect(goal.quantity).toBe(1);
+    }
+  });
+
+  test("skips crafting skill when bank lacks materials", () => {
+    const char = makeChar({
+      mining_level: 5,
+      woodcutting_level: 5,
+      fishing_level: 5,
+      weaponcrafting_level: 1, // lowest but no materials
+      gearcrafting_level: 5,
+      jewelrycrafting_level: 5,
+      cooking_level: 5,
+      alchemy_level: 5,
+      level: 5,
+    });
+    const gd = makeGameData();
+    // Empty bank — no materials for weaponcrafting
+    const goal = maxAllSkills(char, emptyBoard, gd);
+    // Should fall through to combat (next lowest after crafting skills all skip)
+    expect(goal.type).not.toBe("craft");
+  });
+
+  test("refines raw materials when gathering skill has enough in bank", () => {
+    const char = makeChar({
+      mining_level: 1, // lowest — gathering skill
+      woodcutting_level: 5,
+      fishing_level: 5,
+      weaponcrafting_level: 5,
+      gearcrafting_level: 5,
+      jewelrycrafting_level: 5,
+      cooking_level: 5,
+      alchemy_level: 5,
+      level: 5,
+    });
+    const board: BoardSnapshot = {
+      characters: {},
+      bank: { items: [{ code: "copper_ore", quantity: 15 }], gold: 0, lastUpdated: Date.now() },
+    };
+    const gd = makeGameData();
+    const goal = maxAllSkills(char, board, gd);
+    expect(goal.type).toBe("craft");
+    if (goal.type === "craft") {
+      expect(goal.item).toBe("copper_bar");
+      expect(goal.quantity).toBe(1);
+    }
+  });
+
+  test("gathers when gathering skill is lowest but bank lacks raw materials", () => {
+    const char = makeChar({
+      mining_level: 1, // lowest — not enough ore to refine
+      woodcutting_level: 5,
+      fishing_level: 5,
+      weaponcrafting_level: 5,
+      gearcrafting_level: 5,
+      jewelrycrafting_level: 5,
+      cooking_level: 5,
+      alchemy_level: 5,
+      level: 5,
+    });
+    const board: BoardSnapshot = {
+      characters: {},
+      bank: { items: [{ code: "copper_ore", quantity: 3 }], gold: 0, lastUpdated: Date.now() },
+    };
+    const gd = makeGameData();
+    const goal = maxAllSkills(char, board, gd);
+    expect(goal.type).toBe("gather");
+    if (goal.type === "gather") {
+      expect(goal.resource).toBe("copper_rocks");
+    }
   });
 });
