@@ -1,7 +1,10 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { Agent } from "./agent";
 import { GameData } from "./game-data";
-import type { Character, GameMap, Monster, SimpleItem } from "../types";
+import type { Character, GameMap, Monster, SimpleItem, Goal } from "../types";
+import type { BoardSnapshot } from "../board/board";
+import { Board } from "../board/board";
+import { Coordinator } from "../coordinator/coordinator";
 import { existsSync, unlinkSync } from "fs";
 
 const TEST_LOG = "logs/test-agent.log";
@@ -272,5 +275,67 @@ describe("Agent", () => {
     });
     const override = Agent.checkTaskOverride(char, gd, []);
     expect(override).toBeNull();
+  });
+
+  // === Party fight tests ===
+
+  test("getActivityType returns combat for party fight goals", () => {
+    expect(Agent.getActivityType({ type: "fight", monster: "boss_chicken", party: ["alice", "bob", "charlie"] }, undefined)).toBe("combat");
+  });
+
+  test("party fight goal is identified correctly", () => {
+    const goal = { type: "fight" as const, monster: "boss_chicken", party: ["alice", "bob", "charlie"] };
+    expect(goal.party).toBeDefined();
+    expect(goal.party!.length).toBe(3);
+  });
+
+  test("solo fight goal has no party field", () => {
+    const goal: Goal = { type: "fight", monster: "chicken" };
+    if (goal.type === "fight") {
+      expect(goal.party).toBeUndefined();
+    }
+  });
+
+  test("party initiator is alphabetically first", () => {
+    const party = ["charlie", "alice", "bob"];
+    const sorted = [...party].sort();
+    expect(sorted[0]).toBe("alice");
+  });
+
+  // === Coordinator integration ===
+
+  test("selectStrategyGoal uses coordinator when provided", () => {
+    const board = new Board();
+    const gameData = new GameData();
+    gameData.load([], [], []);
+
+    const strategy = () => ({ type: "gather" as const, resource: "copper_rocks" });
+    const coordinator = new Coordinator(board, gameData, () => ({
+      type: "fight" as const,
+      monster: "chicken",
+    }));
+
+    const char = makeCharacter();
+    const snapshot: BoardSnapshot = { characters: {}, bank: { items: [], gold: 0, lastUpdated: 0 }, geOrders: [] };
+
+    const goal = Agent.selectStrategyGoal(
+      "test-agent", char, snapshot, gameData, strategy, coordinator
+    );
+    expect(goal).toEqual({ type: "fight", monster: "chicken" });
+  });
+
+  test("selectStrategyGoal falls back to strategy when no coordinator", () => {
+    const gameData = new GameData();
+    gameData.load([], [], []);
+
+    const strategy = () => ({ type: "gather" as const, resource: "copper_rocks" });
+
+    const char = makeCharacter();
+    const snapshot: BoardSnapshot = { characters: {}, bank: { items: [], gold: 0, lastUpdated: 0 }, geOrders: [] };
+
+    const goal = Agent.selectStrategyGoal(
+      "test-agent", char, snapshot, gameData, strategy, null
+    );
+    expect(goal).toEqual({ type: "gather", resource: "copper_rocks" });
   });
 });

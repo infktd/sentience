@@ -119,6 +119,74 @@ describe("ApiClient", () => {
     globalThis.fetch = originalFetch;
   });
 
+  test("fight sends participants when provided", async () => {
+    const originalFetch = globalThis.fetch;
+    let capturedBody: string | undefined;
+    const cooldownExpiration = new Date(Date.now() + 3000).toISOString();
+
+    globalThis.fetch = mock(async (_url, init) => {
+      capturedBody = init?.body as string;
+      return new Response(
+        JSON.stringify({
+          data: {
+            cooldown: {
+              total_seconds: 3, remaining_seconds: 3,
+              started_at: new Date().toISOString(),
+              expiration: cooldownExpiration,
+              reason: "fight",
+            },
+            fight: {
+              result: "win", turns: 10, opponent: "boss_chicken", logs: [],
+              characters: [{ character_name: "alice", xp: 100, gold: 50, drops: [], final_hp: 80 }],
+            },
+            characters: [{ name: "alice" }],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as unknown as typeof fetch;
+
+    await client.fight("alice", ["bob", "charlie"]);
+    expect(capturedBody).toBeDefined();
+    const parsed = JSON.parse(capturedBody!);
+    expect(parsed.participants).toEqual(["bob", "charlie"]);
+
+    globalThis.fetch = originalFetch;
+  });
+
+  test("fight sends no body when no participants", async () => {
+    const originalFetch = globalThis.fetch;
+    let capturedBody: string | undefined;
+    const cooldownExpiration = new Date(Date.now() + 3000).toISOString();
+
+    globalThis.fetch = mock(async (_url, init) => {
+      capturedBody = init?.body as string;
+      return new Response(
+        JSON.stringify({
+          data: {
+            cooldown: {
+              total_seconds: 3, remaining_seconds: 3,
+              started_at: new Date().toISOString(),
+              expiration: cooldownExpiration,
+              reason: "fight",
+            },
+            fight: {
+              result: "win", turns: 10, opponent: "chicken", logs: [],
+              characters: [{ character_name: "alice", xp: 50, gold: 5, drops: [], final_hp: 100 }],
+            },
+            characters: [{ name: "alice" }],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as unknown as typeof fetch;
+
+    await client.fight("alice");
+    expect(capturedBody).toBeUndefined();
+
+    globalThis.fetch = originalFetch;
+  });
+
   test("does not set cooldown from expired character state", async () => {
     const originalFetch = globalThis.fetch;
     const pastExpiry = new Date(Date.now() - 5000).toISOString();

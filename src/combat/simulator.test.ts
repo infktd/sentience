@@ -194,6 +194,119 @@ describe("FightSimulator", () => {
     expect(best).toBeNull();
   });
 
+  // === Party simulation tests ===
+
+  test("simulateParty calls API with multiple characters", async () => {
+    const response = makeSimResponse(95, 100, 130, 12);
+    let capturedArgs: unknown[] = [];
+    const api = {
+      simulateFight: mock((...args: unknown[]) => {
+        capturedArgs = args;
+        return Promise.resolve(response);
+      }),
+    } as unknown as ApiClient;
+
+    const sim = new FightSimulator(api);
+    const chars = [makeChar({ name: "alice" }), makeChar({ name: "bob" }), makeChar({ name: "charlie" })];
+    const result = await sim.simulateParty(chars, "boss_chicken");
+
+    expect(result.winRate).toBe(0.95);
+    expect(api.simulateFight).toHaveBeenCalledTimes(1);
+  });
+
+  test("simulateParty falls back to heuristic on API error", async () => {
+    const api = {
+      simulateFight: mock(() => Promise.reject(new Error("API error"))),
+    } as unknown as ApiClient;
+
+    const sim = new FightSimulator(api);
+    const chars = [makeChar({ name: "alice", level: 10 }), makeChar({ name: "bob", level: 10 })];
+    const result = await sim.simulateParty(chars, "boss_chicken");
+
+    // Heuristic fallback should return a result (not throw)
+    expect(result).toBeDefined();
+    expect(typeof result.winRate).toBe("number");
+  });
+
+  test("findBestBoss returns highest-level boss party can beat", async () => {
+    const api = {
+      simulateFight: mock((_simChars: unknown, monster: string) => {
+        // boss_dragon (level 30): too hard
+        if (monster === "boss_dragon") return Promise.resolve(makeSimResponse(50, 100));
+        // boss_chicken (level 5): easy
+        return Promise.resolve(makeSimResponse(95, 100));
+      }),
+    } as unknown as ApiClient;
+
+    const gameData = new GameData();
+    gameData.load(
+      [
+        { map_id: 1, name: "Boss Coop", skin: "coop", x: 0, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "monster", code: "boss_chicken" } } },
+        { map_id: 2, name: "Dragon Lair", skin: "cave", x: 5, y: 5, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "monster", code: "boss_dragon" } } },
+      ] as GameMap[],
+      [],
+      [
+        { name: "Boss Chicken", code: "boss_chicken", level: 5, type: "boss", hp: 300, attack_fire: 20, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 10, max_gold: 50, drops: [] },
+        { name: "Boss Dragon", code: "boss_dragon", level: 30, type: "boss", hp: 1000, attack_fire: 100, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 100, max_gold: 500, drops: [] },
+        { name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [] },
+      ] as Monster[],
+    );
+
+    const sim = new FightSimulator(api);
+    const chars = [makeChar({ level: 10 }), makeChar({ name: "bob", level: 10 }), makeChar({ name: "charlie", level: 10 })];
+    const best = await sim.findBestBoss(chars, gameData);
+
+    expect(best).not.toBeNull();
+    expect(best!.monster.code).toBe("boss_chicken");
+    expect(best!.monster.type).toBe("boss");
+  });
+
+  test("findBestBoss returns null when no boss is safe", async () => {
+    const api = {
+      simulateFight: mock(() => Promise.resolve(makeSimResponse(30, 100))),
+    } as unknown as ApiClient;
+
+    const gameData = new GameData();
+    gameData.load(
+      [
+        { map_id: 1, name: "Boss Coop", skin: "coop", x: 0, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "monster", code: "boss_chicken" } } },
+      ] as GameMap[],
+      [],
+      [
+        { name: "Boss Chicken", code: "boss_chicken", level: 5, type: "boss", hp: 300, attack_fire: 20, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 10, max_gold: 50, drops: [] },
+      ] as Monster[],
+    );
+
+    const sim = new FightSimulator(api);
+    const chars = [makeChar({ level: 3 }), makeChar({ name: "bob", level: 3 })];
+    const best = await sim.findBestBoss(chars, gameData);
+
+    expect(best).toBeNull();
+  });
+
+  test("findBestBoss returns null when no bosses exist", async () => {
+    const api = {
+      simulateFight: mock(() => Promise.resolve(makeSimResponse(100, 100))),
+    } as unknown as ApiClient;
+
+    const gameData = new GameData();
+    gameData.load(
+      [
+        { map_id: 1, name: "Coop", skin: "coop", x: 0, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "monster", code: "chicken" } } },
+      ] as GameMap[],
+      [],
+      [
+        { name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [] },
+      ] as Monster[],
+    );
+
+    const sim = new FightSimulator(api);
+    const chars = [makeChar({ level: 10 })];
+    const best = await sim.findBestBoss(chars, gameData);
+
+    expect(best).toBeNull();
+  });
+
   test("findBestMonster prefers highest-level safe monster", async () => {
     const api = {
       simulateFight: mock((_simChar: unknown, monster: string) => {

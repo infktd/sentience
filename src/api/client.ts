@@ -196,10 +196,12 @@ export class ApiClient {
     return res.data;
   }
 
-  async fight(name: string): Promise<FightData> {
+  async fight(name: string, participants?: string[]): Promise<FightData> {
     await this.waitForCooldown(name);
+    const body = participants?.length ? { participants } : undefined;
     const res = await this.post<ApiResponse<FightData>>(
-      `/my/${name}/action/fight`
+      `/my/${name}/action/fight`,
+      body
     );
     this.handleCooldown(name, res.data.cooldown);
     return res.data;
@@ -398,13 +400,14 @@ export class ApiClient {
   // === Simulation ===
 
   async simulateFight(
-    character: SimulationCharacter,
+    character: SimulationCharacter | SimulationCharacter[],
     monster: string,
     iterations = 100
   ): Promise<SimulationResponse> {
+    const characters = Array.isArray(character) ? character : [character];
     const res = await this.post<ApiResponse<SimulationResponse>>(
       "/simulation/fight_simulation",
-      { characters: [character], monster, iterations }
+      { characters, monster, iterations }
     );
     return res.data;
   }

@@ -99,6 +99,10 @@ export class GameData {
     return [...this.monsters.values()].filter((m) => m.level <= maxLevel);
   }
 
+  getBossMonsters(maxLevel: number): Monster[] {
+    return this.getMonstersByLevel(maxLevel).filter((m) => m.type === "boss");
+  }
+
   getItemByCode(code: string): Item | undefined {
     return this.items.get(code);
   }

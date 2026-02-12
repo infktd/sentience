@@ -94,6 +94,59 @@ export class FightSimulator {
     return result;
   }
 
+  async simulateParty(
+    characters: Character[],
+    monsterCode: string,
+    iterations = DEFAULT_ITERATIONS
+  ): Promise<SimulationResult> {
+    try {
+      const simChars = characters.map((c) => FightSimulator.toSimInput(c));
+      const response = await this.api.simulateFight(simChars, monsterCode, iterations);
+
+      const wins = response.results.filter((r) => r.result === "win").length;
+      const total = response.results.length;
+      const avgHp =
+        response.results.reduce((sum, r) => {
+          // Average across all characters' final HP
+          const charHp = r.character_results.reduce((s, cr) => s + cr.final_hp, 0) / r.character_results.length;
+          return sum + charHp;
+        }, 0) / total;
+      const avgTurns =
+        response.results.reduce((sum, r) => sum + r.turns, 0) / total;
+
+      return { winRate: wins / total, avgFinalHp: avgHp, avgTurns };
+    } catch {
+      // Fallback heuristic: estimate based on combined party level vs monster
+      const avgLevel = characters.reduce((sum, c) => sum + c.level, 0) / characters.length;
+      // Party bonus: more characters = higher effective level
+      const effectiveLevel = avgLevel * (1 + (characters.length - 1) * 0.3);
+      // Very rough: if effective level >> monster level, high win rate
+      return {
+        winRate: Math.min(effectiveLevel / (effectiveLevel + 10), 0.99),
+        avgFinalHp: characters[0]?.max_hp ?? 100,
+        avgTurns: 15,
+      };
+    }
+  }
+
+  async findBestBoss(
+    characters: Character[],
+    gameData: GameData
+  ): Promise<{ monster: Monster; result: SimulationResult } | null> {
+    // Allow bosses up to 2x party's max level — simulation handles safety check
+    const maxLevel = Math.max(...characters.map((c) => c.level));
+    const searchLevel = Math.max(maxLevel * 2, maxLevel + 10);
+    const bosses = gameData.getBossMonsters(searchLevel).sort((a, b) => b.level - a.level);
+
+    for (const boss of bosses) {
+      const result = await this.simulateParty(characters, boss.code);
+      if (result.winRate >= WIN_RATE_THRESHOLD) {
+        return { monster: boss, result };
+      }
+    }
+    return null;
+  }
+
   async findBestMonster(
     character: Character,
     gameData: GameData

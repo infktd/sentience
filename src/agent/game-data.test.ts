@@ -1029,6 +1029,47 @@ describe("GameData", () => {
     expect(goal).toBeNull();
   });
 
+  // === getBossMonsters tests ===
+
+  test("getBossMonsters returns only boss-type monsters up to maxLevel", () => {
+    const gameData = new GameData();
+    gameData.load(
+      [],
+      [],
+      [
+        { name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [] },
+        { name: "Boss Chicken", code: "boss_chicken", level: 5, type: "boss", hp: 300, attack_fire: 20, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 10, max_gold: 50, drops: [] },
+        { name: "Elite Wolf", code: "elite_wolf", level: 10, type: "elite", hp: 200, attack_fire: 0, attack_earth: 15, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 5, max_gold: 20, drops: [] },
+        { name: "Boss Dragon", code: "boss_dragon", level: 30, type: "boss", hp: 1000, attack_fire: 100, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 100, max_gold: 500, drops: [] },
+      ] as Monster[]
+    );
+
+    const bosses = gameData.getBossMonsters(15);
+    expect(bosses).toHaveLength(1);
+    expect(bosses[0].code).toBe("boss_chicken");
+  });
+
+  test("getBossMonsters returns empty when no bosses exist", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [
+      { name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [] },
+    ] as Monster[]);
+
+    const bosses = gameData.getBossMonsters(50);
+    expect(bosses).toHaveLength(0);
+  });
+
+  test("getBossMonsters returns all bosses up to level", () => {
+    const gameData = new GameData();
+    gameData.load([], [], [
+      { name: "Boss Chicken", code: "boss_chicken", level: 5, type: "boss", hp: 300, attack_fire: 20, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 10, max_gold: 50, drops: [] },
+      { name: "Boss Dragon", code: "boss_dragon", level: 30, type: "boss", hp: 1000, attack_fire: 100, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 100, max_gold: 500, drops: [] },
+    ] as Monster[]);
+
+    const bosses = gameData.getBossMonsters(50);
+    expect(bosses).toHaveLength(2);
+  });
+
   test("findGESellGoal skips items with quantity <= 10", () => {
     const gameData = new GameData();
     gameData.load([], [], [], [

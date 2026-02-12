@@ -657,7 +657,7 @@ export interface GECancelData {
 
 export type Goal =
   | { type: "gather"; resource: string }
-  | { type: "fight"; monster: string }
+  | { type: "fight"; monster: string; party?: string[] }
   | { type: "craft"; item: string; quantity: number }
   | { type: "buy_npc"; npc: string; item: string; quantity: number }
   | { type: "buy_ge"; item: string; maxPrice: number; quantity: number }

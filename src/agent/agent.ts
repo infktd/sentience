@@ -8,6 +8,7 @@ import { ApiRequestError } from "../api/client";
 import type { ActivityType } from "../equipment/evaluator";
 import { getEquipmentChanges } from "../equipment/manager";
 import type { FightSimulator } from "../combat/simulator";
+import type { Coordinator } from "../coordinator/coordinator";
 
 export type Strategy = (
   state: Character,
@@ -24,6 +25,7 @@ export class Agent {
   private gameData: GameData;
   private logger: Logger;
   private simulator: FightSimulator | null = null;
+  private coordinator: Coordinator | null = null;
   private running = false;
   private consecutiveFailures = 0;
   private lastFailedGoalType: string | null = null;
@@ -36,7 +38,8 @@ export class Agent {
     board: Board,
     gameData: GameData,
     logger: Logger,
-    simulator?: FightSimulator
+    simulator?: FightSimulator,
+    coordinator?: Coordinator
   ) {
     this.name = name;
     this.strategy = strategy;
@@ -45,6 +48,21 @@ export class Agent {
     this.gameData = gameData;
     this.logger = logger;
     this.simulator = simulator ?? null;
+    this.coordinator = coordinator ?? null;
+  }
+
+  static selectStrategyGoal(
+    name: string,
+    state: Character,
+    board: BoardSnapshot,
+    gameData: GameData,
+    strategy: Strategy,
+    coordinator: Coordinator | null
+  ): Goal {
+    if (coordinator) {
+      return coordinator.getGoal(name, state);
+    }
+    return strategy(state, board, gameData);
   }
 
   /**
@@ -246,8 +264,11 @@ export class Agent {
           goal = taskOverride;
           reason = `task management: ${goal.type}`;
         } else {
-          goal = this.strategy(this.state, boardSnapshot, this.gameData);
-          reason = "strategy decision";
+          goal = Agent.selectStrategyGoal(
+            this.name, this.state, boardSnapshot, this.gameData,
+            this.strategy, this.coordinator
+          );
+          reason = this.coordinator ? "coordinator decision" : "strategy decision";
         }
       }
     }
@@ -450,69 +471,184 @@ export class Agent {
         // Restock utility items if needed
         await this.handleUtilityRestock();
 
-        // Safety check via simulator
         let monsterCode = goal.monster;
-        if (this.simulator) {
-          const simResult = await this.simulator.simulate(this.state!, monsterCode);
-          if (simResult.winRate < 0.9) {
-            this.logger.warn("Unsafe fight", {
-              monster: monsterCode,
-              winRate: simResult.winRate,
-            });
-            // Find a safer monster
-            const best = await this.simulator.findBestMonster(this.state!, this.gameData);
-            if (!best) {
-              this.logger.warn("No safe monster found, skipping combat");
-              break;
-            }
-            monsterCode = best.monster.code;
-            this.logger.info("Downgraded fight target", {
-              from: goal.monster,
-              to: monsterCode,
-              winRate: best.result.winRate,
-            });
-          } else {
-            this.logger.info("Fight simulation OK", {
-              monster: monsterCode,
-              winRate: simResult.winRate,
-              avgHpRemaining: simResult.avgFinalHp,
-            });
+
+        if (goal.party) {
+          // === Party fight (boss) ===
+          // No solo safety check — party simulation already done by coordinator
+
+          // Find boss location
+          const bossMaps = this.gameData.findMapsWithMonster(monsterCode);
+          const bossMap = this.gameData.findNearestMap(
+            this.state!.x, this.state!.y, bossMaps
+          );
+          if (!bossMap) {
+            this.logger.error("No map found for boss", { monster: monsterCode });
+            break;
           }
-        }
 
-        // Find monster location
-        const monsterMaps = this.gameData.findMapsWithMonster(monsterCode);
-        const fightTargetMap = this.gameData.findNearestMap(
-          this.state!.x,
-          this.state!.y,
-          monsterMaps
-        );
-        if (!fightTargetMap) {
-          this.logger.error("No map found for monster", { monster: monsterCode });
-          break;
-        }
+          // Move to boss location
+          if (this.state!.x !== bossMap.x || this.state!.y !== bossMap.y) {
+            const moveResult = await this.api.move(this.name, bossMap.x, bossMap.y);
+            this.state = moveResult.character;
+            this.board.updateCharacter(this.name, {
+              currentAction: "party_waiting",
+              target: monsterCode,
+              position: { x: this.state!.x, y: this.state!.y },
+              skillLevels: this.getSkillLevels(),
+              inventoryUsed: this.state!.inventory.reduce((sum, s) => sum + s.quantity, 0),
+              inventoryMax: this.state!.inventory_max_items,
+            });
+            return; // Next tick will check party assembly
+          }
 
-        // Move if needed
-        if (this.state!.x !== fightTargetMap.x || this.state!.y !== fightTargetMap.y) {
-          const moveResult = await this.api.move(this.name, fightTargetMap.x, fightTargetMap.y);
-          this.state = moveResult.character;
-          this.syncBoard();
-          return;
-        }
+          // At boss location — check if all party members are here
+          const otherMembers = goal.party.filter((n) => n !== this.name);
+          const boardSnapshot = this.board.getSnapshot();
+          const allPresent = otherMembers.every((memberName) => {
+            const memberState = boardSnapshot.characters[memberName];
+            if (!memberState) return false;
+            return memberState.position.x === bossMap.x && memberState.position.y === bossMap.y;
+          });
 
-        // Fight
-        const fightResult = await this.api.fight(this.name);
-        const myResult = fightResult.fight.characters.find(
-          (c) => c.character_name === this.name
-        );
-        this.state = fightResult.characters.find((c) => c.name === this.name) ?? this.state!;
-        this.logger.info("Fought", {
-          opponent: fightResult.fight.opponent,
-          result: fightResult.fight.result,
-          xp: myResult?.xp ?? 0,
-          gold: myResult?.gold ?? 0,
-          drops: myResult?.drops ?? [],
-        });
+          if (!allPresent) {
+            // Wait for party members — update board to show waiting
+            this.board.updateCharacter(this.name, {
+              currentAction: "party_waiting",
+              target: monsterCode,
+              position: { x: this.state!.x, y: this.state!.y },
+              skillLevels: this.getSkillLevels(),
+              inventoryUsed: this.state!.inventory.reduce((sum, s) => sum + s.quantity, 0),
+              inventoryMax: this.state!.inventory_max_items,
+            });
+            this.logger.info("Waiting for party", {
+              monster: monsterCode,
+              party: goal.party,
+              waitingFor: otherMembers.filter((n) => {
+                const s = boardSnapshot.characters[n];
+                return !s || s.position.x !== bossMap.x || s.position.y !== bossMap.y;
+              }),
+            });
+            await new Promise((r) => setTimeout(r, 3000));
+            return; // Retry next tick
+          }
+
+          // All party members present — determine initiator
+          const sortedParty = [...goal.party].sort();
+          const isInitiator = sortedParty[0] === this.name;
+
+          if (!isInitiator) {
+            // Non-initiator: wait for initiator to trigger the fight
+            // The API will include us as a participant
+            this.board.updateCharacter(this.name, {
+              currentAction: "party_waiting",
+              target: monsterCode,
+              position: { x: this.state!.x, y: this.state!.y },
+              skillLevels: this.getSkillLevels(),
+              inventoryUsed: this.state!.inventory.reduce((sum, s) => sum + s.quantity, 0),
+              inventoryMax: this.state!.inventory_max_items,
+            });
+            this.logger.info("Party assembled, waiting for initiator", {
+              initiator: sortedParty[0],
+            });
+            await new Promise((r) => setTimeout(r, 2000));
+            break;
+          }
+
+          // Initiator: trigger the party fight
+          this.board.updateCharacter(this.name, {
+            currentAction: "party_fighting",
+            target: monsterCode,
+            position: { x: this.state!.x, y: this.state!.y },
+            skillLevels: this.getSkillLevels(),
+            inventoryUsed: this.state!.inventory.reduce((sum, s) => sum + s.quantity, 0),
+            inventoryMax: this.state!.inventory_max_items,
+          });
+
+          this.logger.info("Initiating party fight", {
+            monster: monsterCode,
+            party: goal.party,
+            participants: otherMembers,
+          });
+
+          const fightResult = await this.api.fight(this.name, otherMembers);
+          const myResult = fightResult.fight.characters.find(
+            (c) => c.character_name === this.name
+          );
+          this.state = fightResult.characters.find((c) => c.name === this.name) ?? this.state!;
+          this.logger.info("Party fought", {
+            opponent: fightResult.fight.opponent,
+            result: fightResult.fight.result,
+            xp: myResult?.xp ?? 0,
+            gold: myResult?.gold ?? 0,
+            drops: myResult?.drops ?? [],
+            partySize: goal.party.length,
+          });
+        } else {
+          // === Solo fight ===
+          // Safety check via simulator
+          if (this.simulator) {
+            const simResult = await this.simulator.simulate(this.state!, monsterCode);
+            if (simResult.winRate < 0.9) {
+              this.logger.warn("Unsafe fight", {
+                monster: monsterCode,
+                winRate: simResult.winRate,
+              });
+              // Find a safer monster
+              const best = await this.simulator.findBestMonster(this.state!, this.gameData);
+              if (!best) {
+                this.logger.warn("No safe monster found, skipping combat");
+                break;
+              }
+              monsterCode = best.monster.code;
+              this.logger.info("Downgraded fight target", {
+                from: goal.monster,
+                to: monsterCode,
+                winRate: best.result.winRate,
+              });
+            } else {
+              this.logger.info("Fight simulation OK", {
+                monster: monsterCode,
+                winRate: simResult.winRate,
+                avgHpRemaining: simResult.avgFinalHp,
+              });
+            }
+          }
+
+          // Find monster location
+          const monsterMaps = this.gameData.findMapsWithMonster(monsterCode);
+          const fightTargetMap = this.gameData.findNearestMap(
+            this.state!.x,
+            this.state!.y,
+            monsterMaps
+          );
+          if (!fightTargetMap) {
+            this.logger.error("No map found for monster", { monster: monsterCode });
+            break;
+          }
+
+          // Move if needed
+          if (this.state!.x !== fightTargetMap.x || this.state!.y !== fightTargetMap.y) {
+            const moveResult = await this.api.move(this.name, fightTargetMap.x, fightTargetMap.y);
+            this.state = moveResult.character;
+            this.syncBoard();
+            return;
+          }
+
+          // Fight
+          const fightResult = await this.api.fight(this.name);
+          const myResult = fightResult.fight.characters.find(
+            (c) => c.character_name === this.name
+          );
+          this.state = fightResult.characters.find((c) => c.name === this.name) ?? this.state!;
+          this.logger.info("Fought", {
+            opponent: fightResult.fight.opponent,
+            result: fightResult.fight.result,
+            xp: myResult?.xp ?? 0,
+            gold: myResult?.gold ?? 0,
+            drops: myResult?.drops ?? [],
+          });
+        }
         break;
       }
 
