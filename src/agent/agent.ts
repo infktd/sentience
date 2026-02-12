@@ -57,9 +57,10 @@ export class Agent {
     if (state.hp < state.max_hp * 0.4) {
       return { type: "rest" };
     }
-    // Deposit if inventory is full
+    // Deposit if inventory is nearly full (total quantity or slot count)
+    const totalQuantity = state.inventory.reduce((sum, s) => sum + s.quantity, 0);
     const usedSlots = state.inventory.filter((s) => s.quantity > 0).length;
-    if (usedSlots >= state.inventory_max_items) {
+    if (totalQuantity >= state.inventory_max_items - 5 || usedSlots >= 20) {
       return { type: "deposit_all" };
     }
     return null;
@@ -172,7 +173,7 @@ export class Agent {
       target: targetSkill,
       position: { x: this.state.x, y: this.state.y },
       skillLevels: this.getSkillLevels(),
-      inventoryUsed: this.state.inventory.filter((s) => s.quantity > 0).length,
+      inventoryUsed: this.state.inventory.reduce((sum, s) => sum + s.quantity, 0),
       inventoryMax: this.state.inventory_max_items,
     });
 
@@ -186,7 +187,7 @@ export class Agent {
         max_hp: this.state.max_hp,
         x: this.state.x,
         y: this.state.y,
-        inventoryUsed: this.state.inventory.filter((s) => s.quantity > 0).length,
+        inventoryUsed: this.state.inventory.reduce((sum, s) => sum + s.quantity, 0),
         inventoryMax: this.state.inventory_max_items,
       }
     );
@@ -458,7 +459,7 @@ export class Agent {
       target: "",
       position: { x: this.state.x, y: this.state.y },
       skillLevels: this.getSkillLevels(),
-      inventoryUsed: this.state.inventory.filter((s) => s.quantity > 0).length,
+      inventoryUsed: this.state.inventory.reduce((sum, s) => sum + s.quantity, 0),
       inventoryMax: this.state.inventory_max_items,
     });
   }

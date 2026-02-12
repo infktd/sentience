@@ -47,19 +47,37 @@ describe("Agent", () => {
     expect(needsRest).toEqual({ type: "rest" });
   });
 
-  test("overrides strategy with deposit when inventory is full", () => {
+  test("overrides strategy with deposit when total quantity near max", () => {
+    // Few slots but high quantities — total quantity triggers deposit
+    const inventory = [
+      { slot: 0, code: "copper_ore", quantity: 50 },
+      { slot: 1, code: "ash_wood", quantity: 48 },
+    ];
+    const char = makeCharacter({ inventory, inventory_max_items: 100 });
+    // totalQuantity=98 >= 100-5=95 → deposit
+    const needsDeposit = Agent.checkSurvivalOverride(char);
+    expect(needsDeposit).toEqual({ type: "deposit_all" });
+  });
+
+  test("overrides strategy with deposit when 20 slots used", () => {
     const inventory = Array.from({ length: 20 }, (_, i) => ({
       slot: i,
-      code: "copper_ore",
+      code: `item_${i}`,
       quantity: 1,
     }));
-    const char = makeCharacter({ inventory, inventory_max_items: 20 });
+    // totalQuantity=20, max=200 → quantity check doesn't fire
+    // but 20 slots >= 20 → deposit
+    const char = makeCharacter({ inventory, inventory_max_items: 200 });
     const needsDeposit = Agent.checkSurvivalOverride(char);
     expect(needsDeposit).toEqual({ type: "deposit_all" });
   });
 
   test("no override when character is healthy with space", () => {
-    const char = makeCharacter({ hp: 80, max_hp: 100, inventory: [] });
+    const inventory = [
+      { slot: 0, code: "copper_ore", quantity: 10 },
+    ];
+    const char = makeCharacter({ hp: 80, max_hp: 100, inventory, inventory_max_items: 100 });
+    // totalQuantity=10 < 95, usedSlots=1 < 20 → no override
     const override = Agent.checkSurvivalOverride(char);
     expect(override).toBeNull();
   });
