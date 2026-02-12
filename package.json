@@ -2,29 +2,12 @@
   "name": "artifacts-mmo",
   "type": "module",
   "scripts": {
-    "dev": "next dev --turbo",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
-  },
-  "dependencies": {
-    "next": "canary",
-    "react": "rc",
-    "react-dom": "rc",
-    "tailwindcss": "4.0.0-alpha.30",
-    "@tailwindcss/postcss": "4.0.0-alpha.30",
-    "lucide-react": "latest",
-    "clsx": "latest",
-    "tailwind-merge": "latest"
+    "start": "bun run src/index.ts",
+    "test": "bun test"
   },
   "devDependencies": {
     "bun-types": "latest",
     "typescript": "latest",
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest"
-  },
-  "eslintConfig": {
-    "extends": "next/core-web-vitals"
+    "@types/node": "latest"
   }
 }
