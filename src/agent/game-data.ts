@@ -1,4 +1,4 @@
-import type { GameMap, Resource, Monster, Item, ItemType, SimpleItem, NpcItem } from "../types";
+import type { GameMap, Resource, Monster, Item, ItemType, SimpleItem, NpcItem, Goal } from "../types";
 
 const EQUIPMENT_TYPES: Set<ItemType> = new Set([
   "weapon", "shield", "helmet", "body_armor", "leg_armor", "boots",
@@ -158,7 +158,7 @@ export class GameData {
       ? Math.floor(inventoryCapacity / materialsPerCraft)
       : 1;
 
-    return Math.max(1, Math.min(maxByMaterials, maxByInventory));
+    return Math.min(maxByMaterials, maxByInventory);
   }
 
   findResourceForDrop(itemCode: string): Resource | undefined {
@@ -177,6 +177,161 @@ export class GameData {
       }
     }
     return undefined;
+  }
+
+  findNeededGatherResource(
+    gatheringSkill: string,
+    gatheringLevel: number,
+    bankItems: SimpleItem[]
+  ): Resource | null {
+    // Get resources this skill can gather at this level
+    const gatherableResources = this.getResourcesForSkill(gatheringSkill)
+      .filter((r) => r.level <= gatheringLevel);
+
+    // Map: drop item code → resource that drops it
+    const dropToResource = new Map<string, Resource>();
+    for (const resource of gatherableResources) {
+      for (const drop of resource.drops) {
+        dropToResource.set(drop.code, resource);
+      }
+    }
+
+    const bankMap = new Map<string, number>();
+    for (const bi of bankItems) bankMap.set(bi.code, bi.quantity);
+
+    // Find recipes with missing materials that we can gather
+    // Prefer the resource that feeds the highest-level recipe
+    let bestResource: Resource | null = null;
+    let bestRecipeLevel = -1;
+
+    for (const item of this.items.values()) {
+      if (!item.craft?.items) continue;
+      for (const mat of item.craft.items) {
+        const bankQty = bankMap.get(mat.code) ?? 0;
+        if (bankQty >= mat.quantity) continue; // already have enough
+
+        const resource = dropToResource.get(mat.code);
+        if (resource && (item.craft.level ?? 0) > bestRecipeLevel) {
+          bestResource = resource;
+          bestRecipeLevel = item.craft.level ?? 0;
+        }
+      }
+    }
+
+    return bestResource;
+  }
+
+  getBestUtilityItems(characterLevel: number, bankItems: SimpleItem[]): Item[] {
+    const bankMap = new Map<string, number>();
+    for (const bi of bankItems) bankMap.set(bi.code, bi.quantity);
+
+    const available: Item[] = [];
+    for (const item of this.items.values()) {
+      if (item.type !== "utility") continue;
+      if (item.level > characterLevel) continue;
+      if ((bankMap.get(item.code) ?? 0) === 0) continue;
+      available.push(item);
+    }
+
+    // Sort: prefer health restore potions first, then by level descending
+    available.sort((a, b) => {
+      const aRestore = a.effects?.some((e) => e.code === "restore") ? 1 : 0;
+      const bRestore = b.effects?.some((e) => e.code === "restore") ? 1 : 0;
+      if (aRestore !== bRestore) return bRestore - aRestore;
+      return b.level - a.level;
+    });
+
+    return available.slice(0, 2);
+  }
+
+  /**
+   * Recursively resolve an item's full crafting chain into the first actionable goal.
+   * Walks the dependency tree: if the item needs materials, and those materials
+   * are themselves craftable, it recurses until it finds something the character
+   * can actually do right now (gather, craft, fight, or buy).
+   */
+  resolveItemChain(
+    targetCode: string,
+    bankItems: SimpleItem[],
+    skillLevels: Record<string, number>,
+    freeInventory: number,
+    visited?: Set<string>
+  ): Goal | null {
+    visited = visited ?? new Set();
+    if (visited.has(targetCode)) return null; // circular dependency
+    visited.add(targetCode);
+
+    const bankMap = new Map<string, number>();
+    for (const bi of bankItems) bankMap.set(bi.code, bi.quantity);
+
+    const item = this.items.get(targetCode);
+
+    // If item is craftable and character has the skill level, try the crafting path
+    if (item?.craft?.items) {
+      const craftSkill = item.craft.skill!;
+      const craftLevel = item.craft.level ?? 0;
+      const charSkillLevel = skillLevels[craftSkill] ?? 0;
+
+      if (charSkillLevel >= craftLevel) {
+        // Check if all materials are already in bank
+        const allAvailable = item.craft.items.every(
+          (mat) => (bankMap.get(mat.code) ?? 0) >= mat.quantity
+        );
+
+        if (allAvailable) {
+          const qty = this.getMaxCraftQuantity(targetCode, bankItems, freeInventory);
+          if (qty > 0) return { type: "craft", item: targetCode, quantity: qty };
+        }
+
+        // Missing materials — try to resolve each one
+        for (const mat of item.craft.items) {
+          const have = bankMap.get(mat.code) ?? 0;
+          if (have >= mat.quantity) continue;
+
+          const subGoal = this.resolveItemChain(
+            mat.code, bankItems, skillLevels, freeInventory, visited
+          );
+          if (subGoal) return subGoal;
+        }
+      }
+    }
+
+    // Not craftable (or can't resolve crafting path) — try direct obtainment
+
+    // 1. Gatherable from a resource?
+    const resource = this.findResourceForDrop(targetCode);
+    if (resource) {
+      const gatherLevel = skillLevels[resource.skill] ?? 0;
+      if (resource.level <= gatherLevel) {
+        const maps = this.findMapsWithResource(resource.code);
+        if (maps.length > 0) {
+          return { type: "gather", resource: resource.code };
+        }
+      }
+    }
+
+    // 2. Buyable from NPC?
+    const npcItem = this.getNpcItemForProduct(targetCode);
+    if (npcItem && npcItem.buy_price !== null) {
+      const currencyInBank = bankMap.get(npcItem.currency) ?? 0;
+      if (currencyInBank >= npcItem.buy_price) {
+        return { type: "buy_npc", npc: npcItem.npc, item: targetCode, quantity: 1 };
+      }
+    }
+
+    // 3. Monster drop?
+    const monster = this.findMonsterForDrop(targetCode);
+    if (monster) {
+      const combatLevel = skillLevels.combat ?? 0;
+      if (monster.level <= combatLevel) {
+        const maps = this.findMapsWithMonster(monster.code);
+        if (maps.length > 0) {
+          return { type: "fight", monster: monster.code };
+        }
+      }
+    }
+
+    return null; // Can't resolve this item
   }
 
   findTasksMaster(taskType: string): GameMap | undefined {

@@ -321,6 +321,9 @@ export class Agent {
       }
 
       case "fight": {
+        // Restock utility items if needed
+        await this.handleUtilityRestock();
+
         // Safety check via simulator
         let monsterCode = goal.monster;
         if (this.simulator) {
@@ -693,6 +696,82 @@ export class Agent {
       const withdrawResult = await this.api.withdrawItems(this.name, [{ code: change.equipCode, quantity: 1 }]);
       this.state = withdrawResult.character;
       this.state = await this.api.equip(this.name, change.equipCode, change.slot);
+    }
+
+    this.syncBoard();
+  }
+
+  private async handleUtilityRestock(): Promise<void> {
+    if (!this.state) return;
+
+    const slot1Empty = this.state.utility1_slot_quantity === 0;
+    const slot2Empty = this.state.utility2_slot_quantity === 0;
+    if (!slot1Empty && !slot2Empty) return;
+
+    const bankItems = this.board.getSnapshot().bank.items;
+    const bestItems = this.gameData.getBestUtilityItems(this.state.level, bankItems);
+    if (bestItems.length === 0) return;
+
+    const slotsToRestock: Array<{ slot: "utility1" | "utility2"; currentCode: string }> = [];
+    if (slot1Empty) slotsToRestock.push({ slot: "utility1", currentCode: this.state.utility1_slot });
+    if (slot2Empty) slotsToRestock.push({ slot: "utility2", currentCode: this.state.utility2_slot });
+
+    this.logger.info("Restocking utility items", {
+      slots: slotsToRestock.map((s) => s.slot),
+      available: bestItems.map((i) => i.code),
+    });
+
+    // Move to bank
+    const bank = this.gameData.findNearestBank(this.state.x, this.state.y);
+    if (!bank) return;
+    if (this.state.x !== bank.x || this.state.y !== bank.y) {
+      const moveResult = await this.api.move(this.name, bank.x, bank.y);
+      this.state = moveResult.character;
+    }
+
+    // Track how much of each item we've claimed
+    const bankMap = new Map<string, number>();
+    for (const bi of bankItems) bankMap.set(bi.code, bi.quantity);
+
+    let itemIndex = 0;
+    for (const { slot, currentCode } of slotsToRestock) {
+      // Unequip old item if slot still has a code
+      if (currentCode) {
+        await this.api.waitForCooldown(this.name);
+        this.state = await this.api.unequip(this.name, slot);
+        // Deposit anything that ended up in inventory
+        const toDeposit = this.state!.inventory
+          .filter((s) => s.quantity > 0)
+          .map((s) => ({ code: s.code, quantity: s.quantity }));
+        if (toDeposit.length > 0) {
+          await this.api.waitForCooldown(this.name);
+          const depositResult = await this.api.depositItems(this.name, toDeposit);
+          this.state = depositResult.character;
+        }
+      }
+
+      // Pick next available item (wrap to reuse if only 1 type)
+      if (itemIndex >= bestItems.length) itemIndex = 0;
+      const item = bestItems[itemIndex];
+      const availableQty = bankMap.get(item.code) ?? 0;
+      const qty = Math.min(availableQty, 50);
+      if (qty <= 0) {
+        itemIndex++;
+        continue;
+      }
+
+      // Withdraw and equip
+      await this.api.waitForCooldown(this.name);
+      const withdrawResult = await this.api.withdrawItems(this.name, [
+        { code: item.code, quantity: qty },
+      ]);
+      this.state = withdrawResult.character;
+
+      await this.api.waitForCooldown(this.name);
+      this.state = await this.api.equip(this.name, item.code, slot, qty);
+
+      bankMap.set(item.code, availableQty - qty);
+      itemIndex++;
     }
 
     this.syncBoard();

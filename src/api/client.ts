@@ -206,11 +206,13 @@ export class ApiClient {
     return res.data;
   }
 
-  async equip(name: string, code: string, slot: ItemSlot): Promise<Character> {
+  async equip(name: string, code: string, slot: ItemSlot, quantity?: number): Promise<Character> {
     await this.waitForCooldown(name);
+    const body: Record<string, unknown> = { code, slot };
+    if (quantity !== undefined) body.quantity = quantity;
     const res = await this.post<ApiResponse<{ cooldown: Cooldown; character: Character }>>(
       `/my/${name}/action/equip`,
-      { code, slot }
+      body
     );
     this.handleCooldown(name, res.data.cooldown);
     return res.data.character;

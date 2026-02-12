@@ -72,6 +72,7 @@ export function maxAllSkills(
   const skills = getSkillLevels(state);
   const othersTargets = getOthersTargets(board, state.name);
   const bankItems = board.bank.items;
+  const freeInventory = state.inventory_max_items - state.inventory.reduce((sum, s) => sum + s.quantity, 0);
 
   // Sort by level ascending (lowest first)
   const sorted = [...skills].sort((a, b) => a.level - b.level);
@@ -84,11 +85,24 @@ export function maxAllSkills(
       // Check if bank has enough raw materials to refine
       const craftable = gameData.getCraftableItems(entry.skill, entry.level, bankItems);
       if (craftable.length > 0) {
-        const qty = gameData.getMaxCraftQuantity(craftable[0].code, bankItems, state.inventory_max_items);
-        return { type: "craft", item: craftable[0].code, quantity: qty };
+        const qty = gameData.getMaxCraftQuantity(craftable[0].code, bankItems, freeInventory);
+        if (qty > 0) return { type: "craft", item: craftable[0].code, quantity: qty };
       }
 
-      // Otherwise gather as usual
+      // Check if any crafting recipe needs materials we can gather
+      const neededResource = gameData.findNeededGatherResource(
+        entry.skill,
+        entry.level,
+        bankItems
+      );
+      if (neededResource) {
+        const neededMaps = gameData.findMapsWithResource(neededResource.code);
+        if (neededMaps.length > 0) {
+          return { type: "gather", resource: neededResource.code };
+        }
+      }
+
+      // Otherwise gather highest-level resource for XP
       const resources = gameData
         .getResourcesForSkill(entry.skill)
         .filter((r) => r.level <= entry.level)
@@ -119,8 +133,8 @@ export function maxAllSkills(
       // Check bank for craftable recipes
       const craftable = gameData.getCraftableItems(entry.skill, entry.level, bankItems);
       if (craftable.length > 0) {
-        const qty = gameData.getMaxCraftQuantity(craftable[0].code, bankItems, state.inventory_max_items);
-        return { type: "craft", item: craftable[0].code, quantity: qty };
+        const qty = gameData.getMaxCraftQuantity(craftable[0].code, bankItems, freeInventory);
+        if (qty > 0) return { type: "craft", item: craftable[0].code, quantity: qty };
       }
 
       // Check if any recipe is almost craftable — missing only NPC-buyable materials

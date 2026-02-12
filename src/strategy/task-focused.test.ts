@@ -158,6 +158,80 @@ describe("taskFocused", () => {
     }
   });
 
+  test("resolves depth-2 chain: gathers ore when task needs crafted bar", () => {
+    // Task: produce copper_bar. Bank has no copper_ore.
+    // Chain: copper_bar → needs copper_ore → gather copper_rocks
+    const char = makeChar({
+      task: "copper_bar",
+      task_type: "items",
+      task_progress: 0,
+      task_total: 5,
+    });
+    const gd = makeGameData();
+    const goal = taskFocused(char, emptyBoard, gd);
+    expect(goal.type).toBe("gather");
+    if (goal.type === "gather") {
+      expect(goal.resource).toBe("copper_rocks");
+    }
+  });
+
+  test("resolves depth-2 chain: crafts bar when task needs bar and bank has ore", () => {
+    // Task: produce copper_bar. Bank has enough copper_ore.
+    // Chain: copper_bar → has copper_ore → craft copper_bar
+    const char = makeChar({
+      task: "copper_bar",
+      task_type: "items",
+      task_progress: 0,
+      task_total: 5,
+    });
+    const board: BoardSnapshot = {
+      characters: {},
+      bank: { items: [{ code: "copper_ore", quantity: 50 }], gold: 0, lastUpdated: Date.now() },
+    };
+    const gd = makeGameData();
+    const goal = taskFocused(char, board, gd);
+    expect(goal.type).toBe("craft");
+    if (goal.type === "craft") {
+      expect(goal.item).toBe("copper_bar");
+    }
+  });
+
+  test("resolves monster drop for intermediate material in chain", () => {
+    // Set up: task item needs wolf_bone (mob drop) + copper_bar (craftable)
+    const gd = new GameData();
+    gd.load(
+      [
+        { map_id: 1, name: "Copper Mine", skin: "mine", x: 2, y: 0, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "resource", code: "copper_rocks" } } },
+        { map_id: 7, name: "Wolf Den", skin: "den", x: 5, y: 5, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "monster", code: "wolf" } } },
+        { map_id: 5, name: "Bank", skin: "bank", x: 4, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "bank", code: "bank" } } },
+      ] as GameMap[],
+      [{ name: "Copper Rocks", code: "copper_rocks", skill: "mining", level: 1, drops: [{ code: "copper_ore", rate: 100, min_quantity: 1, max_quantity: 1 }] }] as Resource[],
+      [{ name: "Wolf", code: "wolf", level: 5, type: "normal", hp: 120, attack_fire: 0, attack_earth: 8, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 1, max_gold: 5, drops: [{ code: "wolf_bone", rate: 30, min_quantity: 1, max_quantity: 1 }] }] as Monster[],
+      [
+        { name: "Copper Bar", code: "copper_bar", level: 1, type: "resource", subtype: "bar", description: "", tradeable: true, craft: { skill: "mining", level: 1, items: [{ code: "copper_ore", quantity: 10 }], quantity: 1 } },
+        { name: "Bone Weapon", code: "bone_weapon", level: 5, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 5, items: [{ code: "copper_bar", quantity: 3 }, { code: "wolf_bone", quantity: 5 }], quantity: 1 } },
+      ] as Item[]
+    );
+
+    const char = makeChar({
+      task: "bone_weapon",
+      task_type: "items",
+      task_progress: 0,
+      task_total: 1,
+    });
+
+    // Has copper_bar but not wolf_bone → fight wolf
+    const board: BoardSnapshot = {
+      characters: {},
+      bank: { items: [{ code: "copper_bar", quantity: 10 }], gold: 0, lastUpdated: Date.now() },
+    };
+    const goal = taskFocused(char, board, gd);
+    expect(goal.type).toBe("fight");
+    if (goal.type === "fight") {
+      expect(goal.monster).toBe("wolf");
+    }
+  });
+
   test("falls back to maxAllSkills when task is complete", () => {
     const char = makeChar({
       task: "chicken",

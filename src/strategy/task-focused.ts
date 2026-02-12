@@ -27,7 +27,8 @@ export function taskFocused(
   }
 
   if (state.task_type === "items") {
-    return handleItemTask(state, board, gameData, state.inventory_max_items);
+    const freeInventory = state.inventory_max_items - state.inventory.reduce((sum, s) => sum + s.quantity, 0);
+    return handleItemTask(state, board, gameData, freeInventory);
   }
 
   // Unknown task type — fall back
@@ -53,79 +54,29 @@ function handleItemTask(
   state: Character,
   board: BoardSnapshot,
   gameData: GameData,
-  inventoryCapacity: number
+  freeInventory: number
 ): Goal {
-  const taskItem = state.task;
-  const bankItems = board.bank.items;
-
-  // Check if the item is craftable
-  const item = gameData.getItemByCode(taskItem);
-  if (item?.craft) {
-    // Check if bank has materials to craft it
-    const craftable = gameData.getCraftableItems(
-      item.craft.skill!,
-      item.craft.level ?? 0,
-      bankItems
-    );
-    if (craftable.some((c) => c.code === taskItem)) {
-      const qty = gameData.getMaxCraftQuantity(taskItem, bankItems, inventoryCapacity);
-      return { type: "craft", item: taskItem, quantity: qty };
-    }
-
-    // If not craftable, try to gather the missing materials
-    const materials = item.craft.items ?? [];
-    const bankMap = new Map<string, number>();
-    for (const bi of bankItems) bankMap.set(bi.code, bi.quantity);
-
-    for (const mat of materials) {
-      const have = bankMap.get(mat.code) ?? 0;
-      if (have < mat.quantity) {
-        // Try to find a resource that drops this material
-        const resource = gameData.findResourceForDrop(mat.code);
-        if (resource) {
-          const skillLevel = getSkillLevel(state, resource.skill);
-          if (resource.level <= skillLevel) {
-            const maps = gameData.findMapsWithResource(resource.code);
-            if (maps.length > 0) {
-              return { type: "gather", resource: resource.code };
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Check if the item is a resource drop (raw gathered item)
-  const resource = gameData.findResourceForDrop(taskItem);
-  if (resource) {
-    const skillLevel = getSkillLevel(state, resource.skill);
-    if (resource.level <= skillLevel) {
-      const maps = gameData.findMapsWithResource(resource.code);
-      if (maps.length > 0) {
-        return { type: "gather", resource: resource.code };
-      }
-    }
-  }
-
-  // Check if the item is a monster drop
-  const monster = gameData.findMonsterForDrop(taskItem);
-  if (monster && monster.level <= state.level) {
-    const maps = gameData.findMapsWithMonster(monster.code);
-    if (maps.length > 0) {
-      return { type: "fight", monster: monster.code };
-    }
-  }
-
-  // Can't figure out how to get this item — fall back
-  return maxAllSkills(state, board, gameData);
-}
-
-function getSkillLevel(state: Character, skill: string): number {
-  const map: Record<string, number> = {
+  const skillLevels: Record<string, number> = {
     mining: state.mining_level,
     woodcutting: state.woodcutting_level,
     fishing: state.fishing_level,
     alchemy: state.alchemy_level,
+    weaponcrafting: state.weaponcrafting_level,
+    gearcrafting: state.gearcrafting_level,
+    jewelrycrafting: state.jewelrycrafting_level,
+    cooking: state.cooking_level,
+    combat: state.level,
   };
-  return map[skill] ?? 0;
+
+  const goal = gameData.resolveItemChain(
+    state.task,
+    board.bank.items,
+    skillLevels,
+    freeInventory
+  );
+
+  if (goal) return goal;
+
+  // Chain unresolvable — fall back to general training
+  return maxAllSkills(state, board, gameData);
 }

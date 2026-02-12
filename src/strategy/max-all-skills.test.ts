@@ -238,6 +238,53 @@ describe("maxAllSkills", () => {
     }
   });
 
+  test("gathers needed material for crafting recipe instead of highest-level resource", () => {
+    // Set up: mining is lowest, bank has no copper_ore, weaponcrafting needs copper_bar (which needs copper_ore)
+    const gd = new GameData();
+    gd.load(
+      [
+        { map_id: 1, name: "Copper Mine", skin: "mine", x: 2, y: 0, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "resource", code: "copper_rocks" } } },
+        { map_id: 8, name: "Iron Mine", skin: "mine", x: 5, y: 0, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "resource", code: "iron_rocks" } } },
+        { map_id: 5, name: "Bank", skin: "bank", x: 4, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "bank", code: "bank" } } },
+        { map_id: 4, name: "Chicken Coop", skin: "coop", x: 0, y: 1, layer: "overworld", access: { type: "standard" }, interactions: { content: { type: "monster", code: "chicken" } } },
+      ] as GameMap[],
+      [
+        { name: "Copper Rocks", code: "copper_rocks", skill: "mining", level: 1, drops: [{ code: "copper_ore", rate: 100, min_quantity: 1, max_quantity: 1 }] },
+        { name: "Iron Rocks", code: "iron_rocks", skill: "mining", level: 10, drops: [{ code: "iron_ore", rate: 100, min_quantity: 1, max_quantity: 1 }] },
+      ] as Resource[],
+      [
+        { name: "Chicken", code: "chicken", level: 1, type: "normal", hp: 60, attack_fire: 4, attack_earth: 0, attack_water: 0, attack_air: 0, res_fire: 0, res_earth: 0, res_water: 0, res_air: 0, critical_strike: 0, initiative: 0, min_gold: 0, max_gold: 2, drops: [] },
+      ] as Monster[],
+      [
+        { name: "Copper Bar", code: "copper_bar", level: 1, type: "resource", subtype: "bar", description: "", tradeable: true, craft: { skill: "mining", level: 1, items: [{ code: "copper_ore", quantity: 10 }], quantity: 1 } },
+        { name: "Iron Sword", code: "iron_sword", level: 10, type: "weapon", subtype: "sword", description: "", tradeable: true, craft: { skill: "weaponcrafting", level: 10, items: [{ code: "iron_ore", quantity: 6 }], quantity: 1 } },
+      ] as Item[]
+    );
+
+    const char = makeChar({
+      mining_level: 10,
+      woodcutting_level: 20,
+      fishing_level: 20,
+      weaponcrafting_level: 20,
+      gearcrafting_level: 20,
+      jewelrycrafting_level: 20,
+      cooking_level: 20,
+      alchemy_level: 20,
+      level: 20,
+    });
+    // Bank has neither enough copper_ore to refine NOR iron_ore → needs both
+    // iron_sword (level 10 recipe) needs iron_ore → should prefer iron_rocks
+    const board: BoardSnapshot = {
+      characters: {},
+      bank: { items: [{ code: "copper_ore", quantity: 5 }], gold: 0, lastUpdated: Date.now() },
+    };
+    const goal = maxAllSkills(char, board, gd);
+    expect(goal.type).toBe("gather");
+    if (goal.type === "gather") {
+      expect(goal.resource).toBe("iron_rocks");
+    }
+  });
+
   test("buys from NPC when crafting recipe needs NPC material and bank has currency", () => {
     const char = makeChar({
       mining_level: 20,
