@@ -396,15 +396,18 @@ export class Agent {
           }
         }
 
-        // Find and move to workshop
-        const workshops = this.gameData.findMapsWithContent("workshop");
+        // Find and move to the correct workshop for this skill
+        const craftSkill = recipe?.craft?.skill;
+        const workshops = craftSkill
+          ? this.gameData.findMapsWithContent("workshop", craftSkill)
+          : this.gameData.findMapsWithContent("workshop");
         const craftTargetMap = this.gameData.findNearestMap(
           this.state!.x,
           this.state!.y,
           workshops
         );
         if (!craftTargetMap) {
-          this.logger.error("No workshop found");
+          this.logger.error("No workshop found", { skill: craftSkill });
           break;
         }
         if (this.state!.x !== craftTargetMap.x || this.state!.y !== craftTargetMap.y) {

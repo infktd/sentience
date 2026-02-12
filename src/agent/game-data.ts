@@ -35,9 +35,11 @@ export class GameData {
     );
   }
 
-  findMapsWithContent(contentType: string): GameMap[] {
+  findMapsWithContent(contentType: string, contentCode?: string): GameMap[] {
     return this.maps.filter(
-      (m) => m.interactions.content?.type === contentType
+      (m) =>
+        m.interactions.content?.type === contentType &&
+        (contentCode === undefined || m.interactions.content.code === contentCode)
     );
   }
 
