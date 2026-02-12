@@ -8,7 +8,8 @@
             "installOhMyZsh": true,
             "username": "bun"
         },
-        "ghcr.io/devcontainers/features/git:1": {}
+        "ghcr.io/devcontainers/features/git:1": {},
+        "ghcr.io/devcontainers/features/github-cli:1": {}
     },
     "postCreateCommand": "bun install",
     "remoteUser": "bun"
