@@ -1,0 +1,15 @@
+{
+    "name": "Artifacts MMO Bot",
+    "image": "oven/bun:latest",
+    "features": {
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "installZsh": true,
+            "configureZshAsDefaultShell": true,
+            "installOhMyZsh": true,
+            "username": "bun"
+        },
+        "ghcr.io/devcontainers/features/git:1": {}
+    },
+    "postCreateCommand": "bun install",
+    "remoteUser": "bun"
+}
